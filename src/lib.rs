@@ -3,9 +3,54 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(feature = "allocator_api", feature(allocator_api))]
+#![flux::defs {
+    fn pow2(x: int) -> bool {
+        pow2bv(bv_int_to_bv64(x))
+    }
+
+    fn pow2bv(x: bitvec<64>) -> bool {
+        bv_and(x, bv_sub(x, bv_int_to_bv64(1)))
+            == bv_int_to_bv64(0)
+    }
+
+    fn can_round_up(n: int, divisor: int) -> bool {
+        n + divisor - 1 <= usize::MAX
+    }
+
+    fn rounded_up(n: int, divisor: int, result: int) -> bool {
+        n <= result &&
+        result <= n + divisor - 1 &&
+        result % divisor == 0
+    }
+
+    fn rounded_down(n: int, divisor: int, result: int) -> bool {
+        result <= n &&
+        n <= result + divisor - 1 &&
+        result % divisor == 0
+    }
+
+    fn is_valid_layout(s: int, a: int) -> bool {
+        (s + a - 1 <= isize::MAX) && a > 0 && pow2(a)
+    }
+
+    // A pointer (as NonNull/RewindGuard indices) to a live region that can hold
+    // `n` bytes and whose address is aligned to `align`.
+    fn allocated(base: int, addr: int, size: int, n: int, align: int) -> bool {
+        addr >= base && size >= n && n >= 0 && addr % align == 0
+    }
+
+    // `Layout::array::<T>(n)` succeeds for an element of `size` bytes and `align` alignment.
+    fn valid_array_layout(n: int, size: int, align: int) -> bool {
+        size == 0 || size * n + align - 1 <= isize::MAX
+    }
+
+}]
 
 #[doc(hidden)]
 pub extern crate alloc as core_alloc;
+
+extern crate flux_core;
+mod extra_flux_specs;
 
 #[cfg(feature = "boxed")]
 pub mod boxed;
@@ -64,10 +109,12 @@ impl<E: Display> Display for AllocOrInitError<E> {
 /// An RAII guard to rewind an allocation on drop (due to failed initialization
 /// of the allocation).
 #[derive(Debug)]
+#[flux_rs::refined_by(base: int, addr: int, size: int)]
 struct RewindGuard<'a, const MIN_ALIGN: usize> {
     bump: &'a Bump<MIN_ALIGN>,
 
     /// The pointer we are guarding.
+    #[flux_rs::field(NonNull<u8>[base, addr, size])]
     ptr: NonNull<u8>,
 
     /// The checkpoint to rewind to on drop.
@@ -87,6 +134,7 @@ impl<'a, const MIN_ALIGN: usize> RewindGuard<'a, MIN_ALIGN> {
     ///
     /// Ownership of `ptr` is moved into this guard, and it must not be used
     /// again except through this guard.
+    #[flux_rs::spec(fn(&Bump<MIN_ALIGN>, NonNull<u8>[@b, @a, @s], RawCheckpoint) -> Self[b, a, s])]
     unsafe fn new(bump: &'a Bump<MIN_ALIGN>, ptr: NonNull<u8>, checkpoint: RawCheckpoint) -> Self {
         Self {
             bump,
@@ -97,6 +145,7 @@ impl<'a, const MIN_ALIGN: usize> RewindGuard<'a, MIN_ALIGN> {
     }
 
     /// Finish this guard, yielding ownership of its pointer.
+    #[flux_rs::spec(fn(Self[@b, @a, @s]) -> NonNull<u8>[b, a, s])]
     fn finish(mut self) -> NonNull<u8> {
         self.active = false;
         self.ptr
@@ -329,6 +378,8 @@ impl<const MIN_ALIGN: usize> Drop for RewindGuard<'_, MIN_ALIGN> {
 /// assert_eq!(bump.allocation_limit(), None);
 /// ```
 #[derive(Debug)]
+
+#[flux_rs::invariant(MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
 pub struct Bump<const MIN_ALIGN: usize = 1> {
     // The current chunk we are bump allocating within.
     current_chunk_footer: Cell<NonNull<ChunkFooter>>,
@@ -338,12 +389,19 @@ pub struct Bump<const MIN_ALIGN: usize = 1> {
 #[repr(C)]
 #[repr(align(16))]
 #[derive(Debug)]
+#[flux_rs::refined_by(base: int, addr: int, size: int, align: int)]
+#[flux_rs::invariant(size > 0)]
+#[flux_rs::invariant(addr == base)]
+#[flux_rs::invariant(addr % align == 0)]
+#[flux_rs::invariant(size >= <ChunkFooter as Sized>::size_of())]
 struct ChunkFooter {
     // Pointer to the start of this chunk allocation. This footer is always at
     // the end of the chunk.
+    #[flux_rs::field(NonNull<u8>[base, addr, size])]
     data: NonNull<u8>,
 
     // The layout of this chunk's allocation.
+    #[flux_rs::field(Layout[size, align])]
     layout: Layout,
 
     // Link to the previous chunk.
@@ -372,6 +430,7 @@ struct EmptyChunkFooter(ChunkFooter);
 
 unsafe impl Sync for EmptyChunkFooter {}
 
+#[flux_rs::spec(EmptyChunkFooter)]
 static EMPTY_CHUNK: EmptyChunkFooter = EmptyChunkFooter(ChunkFooter {
     // This chunk is empty (except the foot itself).
     layout: Layout::new::<ChunkFooter>(),
@@ -403,6 +462,9 @@ impl EmptyChunkFooter {
 impl ChunkFooter {
     // Returns the start and length of the currently allocated region of this
     // chunk.
+    #[flux::trusted(
+        reason = "hangs, will investigate later"
+    )]
     fn as_raw_parts(&self) -> (*const u8, usize) {
         let data = self.data.as_ptr() as *const u8;
         let ptr = self.ptr.get().as_ptr() as *const u8;
@@ -459,9 +521,9 @@ unsafe fn dealloc_chunks_until_stop(
             "Hit the empty chunk while deallocating chunks! This indicates an invalid \
              `Bump::reset_to_raw_checkpoint` invocation."
         );
-        let f = current_chunk;
-        current_chunk = f.as_ref().prev.get();
-        dealloc(f.as_ref().data.as_ptr(), f.as_ref().layout);
+        let f = current_chunk.as_ref();
+        current_chunk = f.prev.get();
+        dealloc(f.data.as_ptr(), f.layout);
     }
 }
 
@@ -472,6 +534,8 @@ unsafe fn dealloc_chunks_until_stop(
 unsafe impl<const MIN_ALIGN: usize> Send for Bump<MIN_ALIGN> {}
 
 #[inline]
+#[flux::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
+#[flux::trusted(reason = "hangs: nonlinear `%` by a variable; same root cause as round_up_to")]
 fn is_pointer_aligned_to<T>(pointer: *mut T, align: usize) -> bool {
     debug_assert!(align.is_power_of_two());
 
@@ -481,6 +545,12 @@ fn is_pointer_aligned_to<T>(pointer: *mut T, align: usize) -> bool {
 }
 
 #[inline]
+#[flux::spec(
+    fn(n: usize, divisor: usize) ->
+        Option<usize{result: rounded_up(n, divisor, result)}>[
+            can_round_up(n, divisor)
+        ]
+    requires divisor > 0 && pow2(divisor))]
 pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
@@ -493,6 +563,11 @@ pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
 #[inline]
+#[flux::spec(
+    fn(n: usize, divisor: usize) ->
+        usize{result: rounded_up(n, divisor, result)}
+    requires divisor > 0 && pow2(divisor) && can_round_up(n, divisor)
+)]
 pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
     match round_up_to(n, divisor) {
         Some(x) => x,
@@ -504,6 +579,10 @@ pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
 }
 
 #[inline]
+#[flux::spec(
+    fn(n: usize, divisor: usize) -> usize{result: rounded_down(n, divisor, result)}
+    requires divisor > 0 && pow2(divisor)
+)]
 pub(crate) fn round_down_to(n: usize, divisor: usize) -> usize {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
@@ -519,6 +598,15 @@ pub(crate) fn round_mut_ptr_down_to(ptr: *mut u8, divisor: usize) -> *mut u8 {
 }
 
 #[inline]
+#[flux::spec(
+    fn(ptr: *mut[@p] u8, divisor: usize) -> {
+        addr: int. *mut[p.base, addr, p.size - (addr - p.addr)] u8
+            | rounded_up(p.addr, divisor, addr)
+    }
+requires
+    divisor > 0 && pow2(divisor) && can_round_up(p.addr, divisor) &&
+    p.addr >= p.base && p.size >= 0 && divisor - 1 <= p.size
+)]
 pub(crate) unsafe fn round_mut_ptr_up_to_unchecked(ptr: *mut u8, divisor: usize) -> *mut u8 {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
@@ -572,15 +660,26 @@ const DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER: usize = FIRST_ALLOCATION_GOAL - OVERHEA
 
 /// The memory size and alignment details for a potential new chunk
 /// allocation.
+#[flux::refined_by(payload: int, align: int, size: int)]
+#[flux::invariant(size == payload + <ChunkFooter as Sized>::size_of())]
+#[flux::invariant(align > 0)]
+#[flux::invariant(align % <ChunkFooter as Sized>::align_of() == 0)]
+#[flux::invariant(payload % <ChunkFooter as Sized>::align_of() == 0)]
+#[flux::invariant(payload > 0)]
 #[derive(Debug, Clone, Copy)]
 struct NewChunkMemoryDetails {
+    #[flux::field(usize[payload])]
     new_size_without_footer: usize,
+    #[flux::field(usize[align])]
     align: usize,
+    #[flux::field(usize[size])]
     size: usize,
 }
 
 /// Wrapper around `Layout::from_size_align` that adds debug assertions.
 #[inline]
+  #[flux::spec(fn(size: usize, align: usize)
+      -> Result<Layout[size, align], AllocErr>[is_valid_layout(size, align)])]
 fn layout_from_size_align(size: usize, align: usize) -> Result<Layout, AllocErr> {
     Layout::from_size_align(size, align).map_err(|_| AllocErr)
 }
@@ -891,6 +990,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// Determine the memory details including final size, alignment and final
     /// size without footer for a new chunk that would be allocated to fulfill
     /// an allocation request.
+    #[flux::trusted] // TODO: this blows up
     fn new_chunk_memory_details(
         new_size_without_footer: Option<usize>,
         requested_layout: Layout,
@@ -941,6 +1041,12 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// If given, `layouts` is a tuple of the current chunk size and the
     /// layout of the allocation request that triggered us to fall back to
     /// allocating a new chunk of memory.
+    #[flux::spec(fn(
+        NewChunkMemoryDetails,
+        Layout,
+        NonNull<ChunkFooter>,
+    ) -> Option<NonNull<ChunkFooter>>
+    requires MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
     unsafe fn new_chunk(
         new_chunk_memory_details: NewChunkMemoryDetails,
         requested_layout: Layout,
@@ -1446,6 +1552,9 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     ///
     /// Errors if reserving space matching `layout` fails.
     #[inline(always)]
+    #[flux_rs::trusted(reason = "TODO: needs the ChunkFooter.ptr invariant")]
+    #[flux_rs::spec(fn(&Self, Layout[@size, @align])
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}, AllocErr>)]
     pub fn try_alloc_layout(&self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
         if let Some(p) = self.try_alloc_layout_fast(layout) {
             Ok(p)
@@ -1633,6 +1742,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
+    #[flux_rs::spec(fn(&Self, Layout[@size, @align])
+        -> Result<RewindGuard<MIN_ALIGN>{v: allocated(v.base, v.addr, v.size, size, align)}, AllocErr>)]
     fn try_alloc_layout_with_rewind(
         &self,
         layout: Layout,
@@ -1824,6 +1935,9 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
+    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s], Layout[@os, @oa], Layout[@ns, @na])
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
+        requires allocated(b, a, s, os, oa) && ns <= os)]
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
@@ -1920,6 +2034,9 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
+    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s], Layout[@os, @oa], Layout[@ns, @na])
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
+        requires allocated(b, a, s, os, oa) && os <= ns)]
     unsafe fn grow_internal(
         &self,
         ptr: NonNull<u8>,
@@ -2030,6 +2147,8 @@ fn oom() -> ! {
 
 unsafe impl<'a, const MIN_ALIGN: usize> alloc::Alloc for &'a Bump<MIN_ALIGN> {
     #[inline(always)]
+    #[flux_rs::spec(fn(&mut Self, Layout[@size, @align])
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}, AllocErr>)]
     unsafe fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
         self.try_alloc_layout(layout)
     }
@@ -2040,6 +2159,10 @@ unsafe impl<'a, const MIN_ALIGN: usize> alloc::Alloc for &'a Bump<MIN_ALIGN> {
     }
 
     #[inline]
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+        -> Result<NonNull<u8>, AllocErr>
+        requires allocated(b, a, s, old_size, align)
+    )]
     unsafe fn realloc(
         &mut self,
         ptr: NonNull<u8>,

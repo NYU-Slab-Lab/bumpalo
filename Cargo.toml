@@ -16,6 +16,9 @@ version = "3.21.0"
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.flux]
+enabled = true
+
 [lib]
 path = "src/lib.rs"
 bench = false
@@ -42,7 +45,10 @@ harness = false
 # trait on stable Rust. Enabling this feature means that `bumpalo` will
 # implement its `Allocator` trait.
 allocator-api2 = { version = "0.2.8", default-features = false, optional = true }
-
+# flux-rs = { git = "https://github.com/flux-rs/flux.git" }
+# flux-core = { git = "https://github.com/flux-rs/flux.git" }
+flux-rs = { path = "../flux/lib/flux-rs" }
+flux-core = { path = "../flux/lib/flux-core" }
 # This dependency is here to allow integration with Serde, if the `serde` feature is enabled
 serde = { version = "1.0.171", optional = true }
 

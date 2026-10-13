@@ -7,6 +7,10 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+#![flux::defs(
+    use crate::is_valid_layout;
+    use crate::allocated;
+)]
 
 #![allow(unstable_name_collisions)]
 #![allow(dead_code)]
@@ -263,6 +267,8 @@ pub unsafe trait Alloc {
     /// rather than directly invoking `panic!` or similar.
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
+    #[flux_rs::spec(fn(&mut Self, Layout[@size, @align])
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}, AllocErr>)]
     unsafe fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr>;
 
     /// Deallocate the memory referenced by `ptr`.
@@ -373,6 +379,11 @@ pub unsafe trait Alloc {
     /// rather than directly invoking `panic!` or similar.
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
+
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+        -> Result<NonNull<u8>, AllocErr>
+        requires allocated(b, a, s, old_size, align)
+    )]
     unsafe fn realloc(
         &mut self,
         ptr: NonNull<u8>,
@@ -471,6 +482,10 @@ pub unsafe trait Alloc {
     /// rather than directly invoking `panic!` or similar.
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+        -> Result<Excess, AllocErr>
+        requires allocated(b, a, s, old_size, align) && is_valid_layout(new_size, align)
+    )]
     unsafe fn realloc_excess(
         &mut self,
         ptr: NonNull<u8>,
