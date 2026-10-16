@@ -380,9 +380,9 @@ pub unsafe trait Alloc {
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
 
-    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@old_size, @align], new_size: usize)
         -> Result<NonNull<u8>, AllocErr>
-        requires allocated(b, a, s, old_size, align)
+        requires allocated(b, a, s, old_size, align) && is_valid_layout(new_size, align)
     )]
     unsafe fn realloc(
         &mut self,
@@ -482,7 +482,7 @@ pub unsafe trait Alloc {
     /// rather than directly invoking `panic!` or similar.
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
-    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@old_size, @align], new_size: usize)
         -> Result<Excess, AllocErr>
         requires allocated(b, a, s, old_size, align) && is_valid_layout(new_size, align)
     )]
@@ -755,6 +755,10 @@ pub unsafe trait Alloc {
     /// rather than directly invoking `panic!` or similar.
     ///
     /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
+    #[flux_rs::spec(fn(&mut Self, NonNull<T>[@b, @a, @s, @_m], n_old: usize, n_new: usize)
+        -> Result<NonNull<T>, AllocErr>
+        requires allocated(b, a, s, n_old * T::size_of(), T::align_of())
+    )]
     unsafe fn realloc_array<T>(
         &mut self,
         ptr: NonNull<T>,

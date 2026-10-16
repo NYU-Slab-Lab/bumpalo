@@ -1,19 +1,29 @@
 extern crate flux_core;
 use flux_rs::{extern_spec, spec};
 
+// Unused to rustc — `MetaSized` appears only in `spec` attributes.
+#[cfg(flux)]
+#[allow(unused_imports)]
+use core::marker::MetaSized;
+
 flux_rs::defs! {
     use crate::pow2;
     use flux_core::ptr::aligned_to;
     use flux_core::ptr::valid;
 }
 
-#[extern_spec(core::ptr)]
-impl<T> core::ptr::NonNull<T> {
-    // TODO: this is broken because we need T : Sized for this spec
-    // ideally we want a way to do this conditionally in the spec
-    #[spec(fn(&mut NonNull<T>[@b, @a, @s]) -> &mut T requires a >= b && s >= T::size_of() && a % T::align_of() == 0)]
-    unsafe fn as_mut<'a>(&mut self) -> &'a mut T;
-}
+// #[extern_spec(core::ptr)]
+// impl<T> core::ptr::NonNull<T> {
+//     // TODO: this is broken because we need T : Sized for this spec
+//     // ideally we want a way to do this conditionally in the spec
+//     #[spec(fn(&mut NonNull<T>[@b, @a, @s]) -> &mut T requires a >= b && s >= T::size_of() && a % T::align_of() == 0)]
+//     unsafe fn as_mut<'a>(&mut self) -> &'a mut T;
+// }
+
+// flux-core specs the `Ord::min` method but not the free function `core::cmp::min`.
+#[extern_spec(core::cmp)]
+#[spec(fn(T[@a], T[@b]) -> T{v: <T as Ord>::min_res(a, b, v)})]
+fn min<T: Ord>(v1: T, v2: T) -> T;
 
 #[extern_spec(core::num)]
 impl usize {
@@ -46,3 +56,18 @@ unsafe fn alloc(layout: Layout) -> *mut u8;
              aligned_to(p, align)
 )]
 unsafe fn dealloc(ptr: *mut u8, layout: Layout);
+
+// Same as flux-core's `NonNull::from_ref`/`from_mut`, for the `From` impls.
+#[extern_spec(core::ptr)]
+impl<'a, T: 'a> From<&'a T> for core::ptr::NonNull<T> {
+    #[spec(fn(&T) -> NonNull<T>{p: p.base == p.addr && p.size == <T as MetaSized>::size_of_val(p.meta) && p.size >= 0
+        && p.addr % <T as MetaSized>::align_of_val(p.meta) == 0})]
+    fn from(r: &'a T) -> Self;
+}
+
+#[extern_spec(core::ptr)]
+impl<'a, T: 'a> From<&'a mut T> for core::ptr::NonNull<T> {
+    #[spec(fn(&mut T) -> NonNull<T>{p: p.base == p.addr && p.size == <T as MetaSized>::size_of_val(p.meta) && p.size >= 0
+        && p.addr % <T as MetaSized>::align_of_val(p.meta) == 0})]
+    fn from(r: &'a mut T) -> Self;
+}

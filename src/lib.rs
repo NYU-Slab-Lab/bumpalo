@@ -2,6 +2,7 @@
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(flux, feature(sized_hierarchy))]
 #![cfg_attr(feature = "allocator_api", feature(allocator_api))]
 #![flux::defs {
     fn pow2(x: int) -> bool {
@@ -43,6 +44,15 @@
     fn valid_array_layout(n: int, size: int, align: int) -> bool {
         size == 0 || size * n + align - 1 <= isize::MAX
     }
+
+    // A `NonNull<ChunkFooter>` that can be turned into a reference with `as_ref`/`as_mut`.
+    fn footer_ptr(base: int, addr: int, size: int) -> bool {
+        allocated(base, addr, size, <ChunkFooter as Sized>::size_of(), <ChunkFooter as Sized>::align_of())
+    }
+
+    // Lets loop-invariant inference carry `footer_ptr` around loops over the chunk list.
+    qualifier FooterSize(size: int) { size >= <ChunkFooter as Sized>::size_of() }
+    qualifier FooterAlign(addr: int) { addr % <ChunkFooter as Sized>::align_of() == 0 }
 
 }]
 
@@ -109,12 +119,12 @@ impl<E: Display> Display for AllocOrInitError<E> {
 /// An RAII guard to rewind an allocation on drop (due to failed initialization
 /// of the allocation).
 #[derive(Debug)]
-#[flux_rs::refined_by(base: int, addr: int, size: int)]
+#[flux_rs::refined_by(base: int, addr: int, size: int, meta: int)]
 struct RewindGuard<'a, const MIN_ALIGN: usize> {
     bump: &'a Bump<MIN_ALIGN>,
 
     /// The pointer we are guarding.
-    #[flux_rs::field(NonNull<u8>[base, addr, size])]
+    #[flux_rs::field(NonNull<u8>[base, addr, size, meta])]
     ptr: NonNull<u8>,
 
     /// The checkpoint to rewind to on drop.
@@ -134,7 +144,7 @@ impl<'a, const MIN_ALIGN: usize> RewindGuard<'a, MIN_ALIGN> {
     ///
     /// Ownership of `ptr` is moved into this guard, and it must not be used
     /// again except through this guard.
-    #[flux_rs::spec(fn(&Bump<MIN_ALIGN>, NonNull<u8>[@b, @a, @s], RawCheckpoint) -> Self[b, a, s])]
+    #[flux_rs::spec(fn(&Bump<MIN_ALIGN>, NonNull<u8>[@b, @a, @s, @m], RawCheckpoint) -> Self[b, a, s, m])]
     unsafe fn new(bump: &'a Bump<MIN_ALIGN>, ptr: NonNull<u8>, checkpoint: RawCheckpoint) -> Self {
         Self {
             bump,
@@ -145,7 +155,7 @@ impl<'a, const MIN_ALIGN: usize> RewindGuard<'a, MIN_ALIGN> {
     }
 
     /// Finish this guard, yielding ownership of its pointer.
-    #[flux_rs::spec(fn(Self[@b, @a, @s]) -> NonNull<u8>[b, a, s])]
+    #[flux_rs::spec(fn(Self[@b, @a, @s, @m]) -> NonNull<u8>[b, a, s, m])]
     fn finish(mut self) -> NonNull<u8> {
         self.active = false;
         self.ptr
@@ -382,6 +392,7 @@ impl<const MIN_ALIGN: usize> Drop for RewindGuard<'_, MIN_ALIGN> {
 #[flux_rs::invariant(MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
 pub struct Bump<const MIN_ALIGN: usize = 1> {
     // The current chunk we are bump allocating within.
+    #[flux::field(Cell<NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}>)]
     current_chunk_footer: Cell<NonNull<ChunkFooter>>,
     allocation_limit: Cell<Option<usize>>,
 }
@@ -389,7 +400,7 @@ pub struct Bump<const MIN_ALIGN: usize = 1> {
 #[repr(C)]
 #[repr(align(16))]
 #[derive(Debug)]
-#[flux_rs::refined_by(base: int, addr: int, size: int, align: int)]
+#[flux_rs::refined_by(base: int, addr: int, size: int, align: int, meta: int)]
 #[flux_rs::invariant(size > 0)]
 #[flux_rs::invariant(addr == base)]
 #[flux_rs::invariant(addr % align == 0)]
@@ -397,7 +408,7 @@ pub struct Bump<const MIN_ALIGN: usize = 1> {
 struct ChunkFooter {
     // Pointer to the start of this chunk allocation. This footer is always at
     // the end of the chunk.
-    #[flux_rs::field(NonNull<u8>[base, addr, size])]
+    #[flux_rs::field(NonNull<u8>[base, addr, size, meta])]
     data: NonNull<u8>,
 
     // The layout of this chunk's allocation.
@@ -408,6 +419,7 @@ struct ChunkFooter {
     //
     // Note that the last node in the `prev` linked list is the canonical empty
     // chunk, whose `prev` link points to itself.
+    #[flux_rs::field(Cell<NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}>)]
     prev: Cell<NonNull<ChunkFooter>>,
 
     // Bump allocation finger that is always in the range `self.data..=self`.
@@ -454,6 +466,7 @@ static EMPTY_CHUNK: EmptyChunkFooter = EmptyChunkFooter(ChunkFooter {
 });
 
 impl EmptyChunkFooter {
+    #[flux_rs::spec(fn(&Self) -> NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)})]
     fn get(&'static self) -> NonNull<ChunkFooter> {
         NonNull::from(&self.0)
     }
@@ -485,6 +498,7 @@ impl ChunkFooter {
 /// This can be used to perform a partial reset of a `Bump`
 #[derive(Debug, Clone, Copy)]
 pub struct RawCheckpoint {
+    #[flux::field(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)})]
     chunk: NonNull<ChunkFooter>,
     ptr: NonNull<u8>,
 }
@@ -505,12 +519,14 @@ impl<const MIN_ALIGN: usize> Drop for Bump<MIN_ALIGN> {
 
 /// Deallocate the full chunk list.
 #[inline]
+#[flux_rs::spec(fn(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}))]
 unsafe fn dealloc_chunk_list(chunk: NonNull<ChunkFooter>) {
     dealloc_chunks_until_stop(chunk, EMPTY_CHUNK.get());
 }
 
 /// Keep deallocating chunks until we get to `stop_chunk`, which is retained.
 #[inline]
+#[flux_rs::spec(fn(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}, NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}))]
 unsafe fn dealloc_chunks_until_stop(
     mut current_chunk: NonNull<ChunkFooter>,
     stop_chunk: NonNull<ChunkFooter>,
@@ -1044,8 +1060,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     #[flux::spec(fn(
         NewChunkMemoryDetails,
         Layout,
-        NonNull<ChunkFooter>,
-    ) -> Option<NonNull<ChunkFooter>>
+        NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)},
+    ) -> Option<NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}>
     requires MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
     unsafe fn new_chunk(
         new_chunk_memory_details: NewChunkMemoryDetails,
@@ -1935,7 +1951,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
-    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s], Layout[@os, @oa], Layout[@ns, @na])
+    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@os, @oa], Layout[@ns, @na])
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
         requires allocated(b, a, s, os, oa) && ns <= os)]
     unsafe fn shrink(
@@ -2034,7 +2050,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
-    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s], Layout[@os, @oa], Layout[@ns, @na])
+    #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@os, @oa], Layout[@ns, @na])
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
         requires allocated(b, a, s, os, oa) && os <= ns)]
     unsafe fn grow_internal(
@@ -2116,6 +2132,7 @@ impl<'a, const MIN_ALIGN: usize> iter::FusedIterator for ChunkIter<'a, MIN_ALIGN
 /// [`iter_allocated_chunks_raw`]: struct.Bump.html#method.iter_allocated_chunks_raw
 #[derive(Debug)]
 pub struct ChunkRawIter<'a, const MIN_ALIGN: usize = 1> {
+    #[flux::field(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)})]
     footer: NonNull<ChunkFooter>,
     bump: PhantomData<&'a Bump<MIN_ALIGN>>,
 }
@@ -2159,7 +2176,7 @@ unsafe impl<'a, const MIN_ALIGN: usize> alloc::Alloc for &'a Bump<MIN_ALIGN> {
     }
 
     #[inline]
-    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s], Layout[@old_size, @align], new_size: usize)
+    #[flux_rs::spec(fn(&mut Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@old_size, @align], new_size: usize)
         -> Result<NonNull<u8>, AllocErr>
         requires allocated(b, a, s, old_size, align)
     )]
@@ -2994,3 +3011,5 @@ mod tests {
         }
     }
 }
+
+

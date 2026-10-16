@@ -77,3 +77,6 @@ bench_allocator_api = ["allocator_api", "blink-alloc/nightly"]
 
 # [profile.bench]
 # debug = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(flux)"] }

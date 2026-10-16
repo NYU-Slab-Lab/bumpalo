@@ -28,12 +28,12 @@ use core::str;
 /// let x = bump.emplace().write(42u64);
 /// assert_eq!(*x, 42);
 /// ```
-#[flux_rs::refined_by(base: int, addr: int, size: int)]
+#[flux_rs::refined_by(base: int, addr: int, size: int, meta: int)]
 #[flux_rs::invariant(allocated(base, addr, size, T::size_of(), T::align_of()))]
 pub struct Emplace<'a, T, const MIN_ALIGN: usize> {
-    #[flux_rs::field(RewindGuard<MIN_ALIGN>[base, addr, size])]
+    #[flux_rs::field(RewindGuard<MIN_ALIGN>[base, addr, size, meta])]
     guard: RewindGuard<'a, MIN_ALIGN>,
-    #[flux_rs::field(NonNull<MaybeUninit<T>>[base, addr, size])]
+    #[flux_rs::field(NonNull<MaybeUninit<T>>[base, addr, size, meta])]
     ptr: NonNull<MaybeUninit<T>>,
 }
 
@@ -47,7 +47,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// # Safety
     ///
     /// `guard` must wrap a pointer that is valid for `MaybeUninit<T>`.
-    #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s]) -> Self[b, a, s]
+    #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s, @m]) -> Self[b, a, s, m]
         requires allocated(b, a, s, T::size_of(), T::align_of()))]
     pub(crate) unsafe fn new(guard: RewindGuard<'a, MIN_ALIGN>) -> Self {
         let ptr = guard.ptr.cast::<MaybeUninit<T>>();
@@ -175,12 +175,12 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
 /// let slice = place.into_mut_slice();
 /// assert_eq!(slice, &[1, 2, 3]);
 /// ```
-#[flux_rs::refined_by(base: int, addr: int, size: int, len: int, cap: int)]
+#[flux_rs::refined_by(base: int, addr: int, size: int, len: int, cap: int, meta: int)]
 #[flux_rs::invariant(len <= cap)]
 #[flux_rs::invariant(size >= cap * T::size_of())]
 #[flux_rs::invariant(valid_array_layout(cap, T::size_of(), T::align_of()))]
 pub struct EmplaceSlice<'a, T, const MIN_ALIGN: usize> {
-    #[flux_rs::field(Emplace<T, MIN_ALIGN>[base, addr, size])]
+    #[flux_rs::field(Emplace<T, MIN_ALIGN>[base, addr, size, meta])]
     inner: Emplace<'a, T, MIN_ALIGN>,
     #[flux_rs::field(usize[len])]
     len: usize,
@@ -205,7 +205,7 @@ where
     /// # Safety
     ///
     /// `guard` must wrap a pointer that is valid for `MaybeUninit<T>`.
-    #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s], cap: usize) -> Self[b, a, s, 0, cap]
+    #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s, @m], cap: usize) -> Self[b, a, s, 0, cap, m]
         requires allocated(b, a, s, T::size_of(), T::align_of()) && s >= cap * T::size_of()
             && valid_array_layout(cap, T::size_of(), T::align_of()))]
     pub(crate) unsafe fn new(guard: RewindGuard<'a, MIN_ALIGN>, capacity: usize) -> Self {
@@ -216,7 +216,7 @@ where
         }
     }
 
-    #[flux_rs::spec(fn(&Self[@b, @a, @s, @l, @c]) -> *mut[b, a, s] T)]
+    #[flux_rs::spec(fn(&Self[@b, @a, @s, @l, @c, @_m]) -> *mut[b, a, s] T)]
     fn base_ptr(&self) -> *mut T {
         self.inner.ptr.as_ptr().cast::<T>()
     }
@@ -544,7 +544,7 @@ where
         self.try_shrink(self.len)
     }
 
-    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c], n: usize) -> Result<(), AllocErr>[#ok]
+    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c, @_m], n: usize) -> Result<(), AllocErr>[#ok]
         ensures self: Self{v: v.len == l && (ok => v.cap >= n)})]
     fn try_grow(&mut self, new_capacity: usize) -> Result<(), AllocErr> {
         if new_capacity <= self.capacity {
@@ -609,7 +609,7 @@ where
     /// # foo().unwrap();
     /// ```
     #[inline]
-    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c], n: usize) -> Result<(), AllocErr>[#ok]
+    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c, @_m], n: usize) -> Result<(), AllocErr>[#ok]
         ensures self: Self{v: v.len == l && (ok => v.cap >= l + n)})]
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), AllocErr> {
         let needed = self.len.checked_add(additional).ok_or(AllocErr)?;
@@ -665,7 +665,7 @@ where
     /// # foo().unwrap();
     /// ```
     #[inline]
-    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c], n: usize) -> Result<(), AllocErr>[#ok]
+    #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c, @_m], n: usize) -> Result<(), AllocErr>[#ok]
         ensures self: Self{v: v.len == l && (ok => v.cap >= l + n)})]
     pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), AllocErr> {
         let needed = self.len.checked_add(additional).ok_or(AllocErr)?;
