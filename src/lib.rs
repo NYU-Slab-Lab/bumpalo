@@ -45,6 +45,15 @@
         size == 0 || size * n + align - 1 <= isize::MAX
     }
 
+    // The bump finger `(fbase, faddr, fsize)` of a chunk whose data is `(base, addr, size)`: it
+    // points into the chunk's allocation, between the start of the data and the footer.
+    fn bump_finger(base: int, addr: int, size: int, fbase: int, faddr: int, fsize: int) -> bool {
+        fbase == base &&
+        addr <= faddr &&
+        faddr <= addr + size - <ChunkFooter as Sized>::size_of() &&
+        faddr + fsize == addr + size
+    }
+
     // A `NonNull<ChunkFooter>` that can be turned into a reference with `as_ref`/`as_mut`.
     fn footer_ptr(base: int, addr: int, size: int) -> bool {
         allocated(base, addr, size, <ChunkFooter as Sized>::size_of(), <ChunkFooter as Sized>::align_of())
@@ -120,6 +129,7 @@ impl<E: Display> Display for AllocOrInitError<E> {
 /// of the allocation).
 #[derive(Debug)]
 #[flux_rs::refined_by(base: int, addr: int, size: int, meta: int)]
+#[flux_rs::invariant(addr > 0)]
 struct RewindGuard<'a, const MIN_ALIGN: usize> {
     bump: &'a Bump<MIN_ALIGN>,
 
@@ -423,6 +433,7 @@ struct ChunkFooter {
     prev: Cell<NonNull<ChunkFooter>>,
 
     // Bump allocation finger that is always in the range `self.data..=self`.
+    #[flux_rs::field(Cell<NonNull<u8>{v: bump_finger(base, addr, size, v.base, v.addr, v.size)}>)]
     ptr: Cell<NonNull<u8>>,
 
     // The bytes allocated in all chunks so far, the canonical empty chunk has
@@ -473,6 +484,17 @@ impl EmptyChunkFooter {
 }
 
 impl ChunkFooter {
+    // Returns a pointer to this footer, which is also the end of the chunk's
+    // allocatable region (where the bump finger starts).
+    #[flux_rs::trusted(reason = "the footer is placed at the end of its own chunk")]
+    #[flux_rs::spec(fn(&ChunkFooter[@b, @a, @s, @_al, @_m]) -> NonNull<u8>{v:
+        v.base == b
+        && v.addr == a + s - <ChunkFooter as Sized>::size_of()
+        && v.size == <ChunkFooter as Sized>::size_of()})]
+    fn data_end(&self) -> NonNull<u8> {
+        NonNull::from(self).cast()
+    }
+
     // Returns the start and length of the currently allocated region of this
     // chunk.
     #[flux::trusted(
@@ -571,7 +593,7 @@ pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
     match n.checked_add(divisor - 1) {
-        Some(x) => Some(x & !(divisor - 1)),
+        Some(x) => Some(mask_down(x, divisor)),
         None => None,
     }
 }
@@ -602,11 +624,32 @@ pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
 pub(crate) fn round_down_to(n: usize, divisor: usize) -> usize {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
+    mask_down(n, divisor)
+}
+
+/// Clear the low bits of `n` below the power of two `divisor`, rounding it
+/// down to a multiple of `divisor`.
+#[inline]
+// TODO: flux leaves integer `!` unrefined and `&` uninterpreted, so it cannot
+// relate `n & !(divisor - 1)` to `divisor`.
+#[flux::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux::spec(
+    fn(n: usize, divisor: usize) -> usize{result: rounded_down(n, divisor, result)}
+    requires divisor > 0 && pow2(divisor)
+)]
+const fn mask_down(n: usize, divisor: usize) -> usize {
     n & !(divisor - 1)
 }
 
 /// Same as `round_down_to` but preserves pointer provenance.
 #[inline]
+// TODO: same as `mask_down`.
+#[flux::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux::spec(
+    fn(ptr: *mut[@p] u8, divisor: usize) -> *mut{q: q.base == p.base
+        && rounded_down(p.addr, divisor, q.addr) && q.addr + q.size == p.addr + p.size} u8
+    requires divisor > 0 && pow2(divisor)
+)]
 pub(crate) fn round_mut_ptr_down_to(ptr: *mut u8, divisor: usize) -> *mut u8 {
     debug_assert!(divisor > 0);
     debug_assert!(divisor.is_power_of_two());
@@ -1174,7 +1217,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 is_pointer_aligned_to(cur_chunk.as_ptr(), MIN_ALIGN),
                 "bump pointer {cur_chunk:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
             );
-            cur_chunk.as_ref().ptr.set(cur_chunk.cast());
+            let footer = cur_chunk.as_ref();
+            footer.ptr.set(footer.data_end());
 
             // Reset the allocated size of the chunk.
             cur_chunk.as_mut().allocated_bytes = cur_chunk.as_ref().layout.size() - FOOTER_SIZE;
@@ -1333,7 +1377,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             dealloc_chunks_until_stop(prev_chunk, checkpoint.chunk);
 
             // Reset the current chunk to the start.
-            cur_chunk.as_ref().ptr.set(cur_chunk.cast());
+            let footer = cur_chunk.as_ref();
+            footer.ptr.set(footer.data_end());
 
             // Recalculate allocated bytes for the current chunk in case there
             // were chunks freed.
@@ -1366,6 +1411,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// assert_eq!(*x, 42);
     /// ```
     #[inline(always)]
+    #[flux_rs::spec(fn(&Self) -> Emplace<T, MIN_ALIGN>{v: v.size >= T::size_of()})]
     pub fn emplace<T>(&self) -> Emplace<'_, T, MIN_ALIGN> {
         self.try_emplace().unwrap_or_else(|_| oom())
     }
@@ -1388,6 +1434,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// # foo().unwrap();
     /// ```
     #[inline(always)]
+    #[flux_rs::spec(fn(&Self) -> Result<Emplace<T, MIN_ALIGN>{v: v.size >= T::size_of()}, AllocErr>)]
     pub fn try_emplace<T>(&self) -> Result<Emplace<'_, T, MIN_ALIGN>, AllocErr> {
         let layout = Layout::new::<T>();
         let guard = self.try_alloc_layout_with_rewind(layout)?;
@@ -2108,6 +2155,7 @@ pub struct ChunkIter<'a, const MIN_ALIGN: usize = 1> {
 impl<'a, const MIN_ALIGN: usize> Iterator for ChunkIter<'a, MIN_ALIGN> {
     type Item = &'a [mem::MaybeUninit<u8>];
 
+    #[flux_rs::spec(fn(self: &strg Self) -> Option<Self::Item> ensures self: Self)]
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             let (ptr, len) = self.raw.next()?;
@@ -2141,6 +2189,7 @@ impl<const MIN_ALIGN: usize> Iterator for ChunkRawIter<'_, MIN_ALIGN> {
     type Item = (*mut u8, usize);
 
     #[inline]
+    #[flux_rs::spec(fn(self: &strg Self) -> Option<(*mut u8, usize)> ensures self: Self)]
     fn next(&mut self) -> Option<(*mut u8, usize)> {
         unsafe {
             let foot = self.footer.as_ref();
@@ -2776,6 +2825,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// assert_eq!(x, [4, 9, 25]);
     /// ```
     #[inline(always)]
+    #[flux_rs::trusted(reason = "panics if the `ExactSizeIterator` yields fewer elements than its `len`")]
     pub fn alloc_slice_fill_iter<T, I>(&self, iter: I) -> &mut [T]
     where
         I: IntoIterator<Item = T>,
@@ -2815,6 +2865,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// assert_eq!(x, Err(()));
     /// ```
     #[inline(always)]
+    #[flux_rs::trusted(reason = "panics if the `ExactSizeIterator` yields fewer elements than its `len`")]
     pub fn alloc_slice_try_fill_iter<T, I, E>(&self, iter: I) -> Result<&mut [T], E>
     where
         I: IntoIterator<Item = Result<T, E>>,
@@ -2840,6 +2891,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// assert_eq!(x, [4, 9, 25]);
     /// ```
     #[inline(always)]
+    #[flux_rs::trusted(reason = "panics if the `ExactSizeIterator` yields fewer elements than its `len`")]
     pub fn try_alloc_slice_fill_iter<T, I>(&self, iter: I) -> Result<&mut [T], AllocErr>
     where
         I: IntoIterator<Item = T>,

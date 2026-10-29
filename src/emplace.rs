@@ -29,7 +29,7 @@ use core::str;
 /// assert_eq!(*x, 42);
 /// ```
 #[flux_rs::refined_by(base: int, addr: int, size: int, meta: int)]
-#[flux_rs::invariant(allocated(base, addr, size, T::size_of(), T::align_of()))]
+#[flux_rs::invariant(allocated(base, addr, size, 0, T::align_of()))]
 pub struct Emplace<'a, T, const MIN_ALIGN: usize> {
     #[flux_rs::field(RewindGuard<MIN_ALIGN>[base, addr, size, meta])]
     guard: RewindGuard<'a, MIN_ALIGN>,
@@ -48,7 +48,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     ///
     /// `guard` must wrap a pointer that is valid for `MaybeUninit<T>`.
     #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s, @m]) -> Self[b, a, s, m]
-        requires allocated(b, a, s, T::size_of(), T::align_of()))]
+        requires allocated(b, a, s, 0, T::align_of()))]
     pub(crate) unsafe fn new(guard: RewindGuard<'a, MIN_ALIGN>) -> Self {
         let ptr = guard.ptr.cast::<MaybeUninit<T>>();
         Self { guard, ptr }
@@ -65,6 +65,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// drop(place);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(&Self[@_b, @_a, @s, @_m]) -> &MaybeUninit<T> requires s >= T::size_of())]
     pub fn as_uninit(&self) -> &MaybeUninit<T> {
         unsafe { self.ptr.as_ref() }
     }
@@ -83,6 +84,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// assert_eq!(*val, 99);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(&mut Self[@_b, @_a, @s, @_m]) -> &mut MaybeUninit<T> requires s >= T::size_of())]
     pub fn as_uninit_mut(&mut self) -> &mut MaybeUninit<T> {
         unsafe { self.ptr.as_mut() }
     }
@@ -104,6 +106,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// assert_eq!(*val, 42);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(Self[@_b, @_a, @s, @_m]) -> &mut T requires s >= T::size_of())]
     pub unsafe fn assume_init(self) -> &'a mut T {
         self.guard.finish();
         unsafe { &mut *self.ptr.as_ptr().cast::<T>() }
@@ -126,6 +129,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// assert_eq!(*val, 123);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(Self[@_b, @_a, @s, @_m]) -> &mut MaybeUninit<T> requires s >= T::size_of())]
     pub fn into_uninit(self) -> &'a mut MaybeUninit<T> {
         self.guard.finish();
         unsafe { &mut *self.ptr.as_ptr() }
@@ -141,6 +145,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
     /// assert_eq!(*x, 42);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(Self[@_b, @_a, @s, @_m], T) -> &mut T requires s >= T::size_of())]
     pub fn write(self, value: T) -> &'a mut T {
         unsafe {
             ptr::write(self.ptr.as_ptr().cast::<T>(), value);
@@ -177,7 +182,7 @@ impl<'a, T, const MIN_ALIGN: usize> Emplace<'a, T, MIN_ALIGN> {
 /// ```
 #[flux_rs::refined_by(base: int, addr: int, size: int, len: int, cap: int, meta: int)]
 #[flux_rs::invariant(len <= cap)]
-#[flux_rs::invariant(size >= cap * T::size_of())]
+#[flux_rs::invariant(addr > 0 && allocated(base, addr, size, cap * T::size_of(), T::align_of()))]
 #[flux_rs::invariant(valid_array_layout(cap, T::size_of(), T::align_of()))]
 pub struct EmplaceSlice<'a, T, const MIN_ALIGN: usize> {
     #[flux_rs::field(Emplace<T, MIN_ALIGN>[base, addr, size, meta])]
@@ -206,7 +211,7 @@ where
     ///
     /// `guard` must wrap a pointer that is valid for `MaybeUninit<T>`.
     #[flux_rs::spec(fn(RewindGuard<MIN_ALIGN>[@b, @a, @s, @m], cap: usize) -> Self[b, a, s, 0, cap, m]
-        requires allocated(b, a, s, T::size_of(), T::align_of()) && s >= cap * T::size_of()
+        requires allocated(b, a, s, cap * T::size_of(), T::align_of())
             && valid_array_layout(cap, T::size_of(), T::align_of()))]
     pub(crate) unsafe fn new(guard: RewindGuard<'a, MIN_ALIGN>, capacity: usize) -> Self {
         Self {
