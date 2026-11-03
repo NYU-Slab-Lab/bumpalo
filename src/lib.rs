@@ -2027,6 +2027,22 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         }
     }
 
+    // Like `try_alloc_layout`, but also returns that the fresh allocation
+    // doesn't overlap the live allocation of `live_size` bytes at `live`.
+    #[inline]
+    #[flux_rs::trusted(reason = "caller contract: `live` is a live allocation of `live_size` bytes from this Bump, and a fresh allocation never overlaps a live one")]
+    #[flux_rs::spec(fn(&Self, Layout[@size, @align], NonNull<u8>[@_lb, @la, @_ls, @_lm], live_size: usize)
+        -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)
+            && (v.addr + size <= la || la + live_size <= v.addr)}, AllocErr>)]
+    fn try_alloc_layout_disjoint(
+        &self,
+        layout: Layout,
+        _live: NonNull<u8>,
+        _live_size: usize,
+    ) -> Result<NonNull<u8>, AllocErr> {
+        self.try_alloc_layout(layout)
+    }
+
     #[inline]
     #[flux_rs::trusted(reason = "relies on the caller contract that `ptr` is a live allocation from this Bump with `layout`; flux can't relate `ptr` to the current chunk")]
     unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
@@ -2071,7 +2087,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             return if is_pointer_aligned_to(ptr.as_ptr(), new_layout.align()) {
                 Ok(ptr)
             } else {
-                let new_ptr = self.try_alloc_layout(new_layout)?;
+                let new_ptr =
+                    self.try_alloc_layout_disjoint(new_layout, ptr, old_layout.size())?;
 
                 // We know that these regions are nonoverlapping because
                 // `new_ptr` is a fresh allocation.
@@ -2180,7 +2197,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         }
 
         // Fallback: do a fresh allocation and copy the existing data into it.
-        let new_ptr = self.try_alloc_layout(new_layout)?;
+        let new_ptr = self.try_alloc_layout_disjoint(new_layout, ptr, old_size)?;
         ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), old_size);
         Ok(new_ptr)
     }
