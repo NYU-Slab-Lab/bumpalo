@@ -560,6 +560,30 @@ unsafe fn dealloc_chunks_until_stop(
 // prevent sending the `Bump` across threads until the borrows end.
 unsafe impl<const MIN_ALIGN: usize> Send for Bump<MIN_ALIGN> {}
 
+/// Lemma: a multiple of a power of two `big` is also a multiple of any smaller
+/// power of two `small`.
+#[cfg(flux)]
+#[flux_rs::proven_externally]
+#[flux_rs::spec(fn(x: usize, big: usize, small: usize) -> {() | x % small == 0}
+    requires x % big == 0 && big > 0 && pow2(big) && small > 0 && pow2(small) && small <= big
+        && big <= isize::MAX + 1)]
+fn align_weaken(_x: usize, _big: usize, _small: usize) {}
+
+/// Lemma: [`align_weaken`] for the address of a pointer.
+#[cfg(flux)]
+#[flux_rs::proven_externally]
+#[flux_rs::spec(fn(p: NonNull<u8>, big: usize, small: usize) -> {() | p.addr % small == 0}
+    requires p.addr % big == 0 && big > 0 && pow2(big) && small > 0 && pow2(small) && small <= big
+        && big <= isize::MAX + 1)]
+fn ptr_align_weaken(_p: NonNull<u8>, _big: usize, _small: usize) {}
+
+/// Lemma: adding a multiple of `align` to an `align`-aligned address keeps it aligned.
+#[cfg(flux)]
+#[flux_rs::proven_externally]
+#[flux_rs::spec(fn(p: NonNull<u8>, d: usize, align: usize) -> {() | (p.addr + d) % align == 0}
+    requires p.addr % align == 0 && d % align == 0 && align > 0)]
+fn ptr_align_add(_p: NonNull<u8>, _d: usize, _align: usize) {}
+
 #[inline]
 #[flux::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
 #[flux::trusted(reason = "hangs: nonlinear `%` by a variable; same root cause as round_up_to")]
@@ -1987,6 +2011,22 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         }
     }
 
+    // If `ptr` is the last allocation, i.e., the bump finger of `footer` (the
+    // current chunk), returns that finger.
+    #[inline]
+    #[flux_rs::trusted(reason = "caller contract: `ptr` is a live allocation of `size` bytes from this Bump, so if it is the current chunk's bump finger, those bytes lie between the finger and the footer")]
+    #[flux_rs::spec(fn(&ChunkFooter[@fb, @fa, @fs, @_al, @_m], NonNull<u8>[@b, @a, @_s, @_pm], size: usize)
+        -> Option<NonNull<u8>{f: bump_finger(fb, fa, fs, f.base, f.addr, f.size)
+            && f.base == b && f.addr == a && f.size >= size + <ChunkFooter as Sized>::size_of()}>)]
+    fn last_allocation(footer: &ChunkFooter, ptr: NonNull<u8>, _size: usize) -> Option<NonNull<u8>> {
+        let finger = footer.ptr.get();
+        if finger == ptr {
+            Some(finger)
+        } else {
+            None
+        }
+    }
+
     #[inline]
     #[flux_rs::trusted(reason = "relies on the caller contract that `ptr` is a live allocation from this Bump with `layout`; flux can't relate `ptr` to the current chunk")]
     unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
@@ -2045,59 +2085,64 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
 
         let old_size = old_layout.size();
         let new_size = new_layout.size();
+        #[cfg(flux)]
+        ptr_align_weaken(ptr, old_layout.align(), new_layout.align());
 
         // This is how much space we would *actually* reclaim while satisfying
         // the requested alignment.
         let delta = round_down_to(old_size - new_size, new_layout.align().max(MIN_ALIGN));
+        #[cfg(flux)]
+        align_weaken(delta, new_layout.align().max(MIN_ALIGN), new_layout.align());
 
-        if self.is_last_allocation(ptr)
-                // Only reclaim the excess space (which requires a copy) if it
-                // is worth it: we are actually going to recover "enough" space
-                // and we can do a non-overlapping copy.
-                //
-                // We do `(old_size + 1) / 2` so division rounds up rather than
-                // down. Consider when:
-                //
-                //     old_size = 5
-                //     new_size = 3
-                //
-                // If we do not take care to round up, this will result in:
-                //
-                //     delta = 2
-                //     (old_size / 2) = (5 / 2) = 2
-                //
-                // And the the check will succeed even though we are have
-                // overlapping ranges:
-                //
-                //     |--------old-allocation-------|
-                //     |------from-------|
-                //                 |-------to--------|
-                //     +-----+-----+-----+-----+-----+
-                //     |  a  |  b  |  c  |  .  |  .  |
-                //     +-----+-----+-----+-----+-----+
-                //
-                // But we MUST NOT have overlapping ranges because we use
-                // `copy_nonoverlapping` below! Therefore, we round the division
-                // up to avoid this issue.
-                && delta >= (old_size + 1) / 2
-        {
-            let footer = self.current_chunk_footer.get();
-            let footer = footer.as_ref();
+        let footer = self.current_chunk_footer.get();
+        let footer = footer.as_ref();
+        if let Some(finger) = Self::last_allocation(footer, ptr, old_size) {
+            // Only reclaim the excess space (which requires a copy) if it
+            // is worth it: we are actually going to recover "enough" space
+            // and we can do a non-overlapping copy.
+            //
+            // We do `(old_size + 1) / 2` so division rounds up rather than
+            // down. Consider when:
+            //
+            //     old_size = 5
+            //     new_size = 3
+            //
+            // If we do not take care to round up, this will result in:
+            //
+            //     delta = 2
+            //     (old_size / 2) = (5 / 2) = 2
+            //
+            // And the the check will succeed even though we are have
+            // overlapping ranges:
+            //
+            //     |--------old-allocation-------|
+            //     |------from-------|
+            //                 |-------to--------|
+            //     +-----+-----+-----+-----+-----+
+            //     |  a  |  b  |  c  |  .  |  .  |
+            //     +-----+-----+-----+-----+-----+
+            //
+            // But we MUST NOT have overlapping ranges because we use
+            // `copy_nonoverlapping` below! Therefore, we round the division
+            // up to avoid this issue.
+            if delta >= (old_size + 1) / 2 {
+                // NB: new_ptr is aligned, because ptr *has to* be aligned, and we
+                // made sure delta is aligned.
+                #[cfg(flux)]
+                ptr_align_add(finger, delta, new_layout.align());
+                let new_ptr = NonNull::new_unchecked(finger.as_ptr().add(delta));
+                debug_assert!(
+                    is_pointer_aligned_to(new_ptr.as_ptr(), MIN_ALIGN),
+                    "bump pointer {new_ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
+                );
+                footer.ptr.set(new_ptr);
 
-            // NB: new_ptr is aligned, because ptr *has to* be aligned, and we
-            // made sure delta is aligned.
-            let new_ptr = NonNull::new_unchecked(footer.ptr.get().as_ptr().add(delta));
-            debug_assert!(
-                is_pointer_aligned_to(new_ptr.as_ptr(), MIN_ALIGN),
-                "bump pointer {new_ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
-            );
-            footer.ptr.set(new_ptr);
+                // NB: we know it is non-overlapping because of the size check
+                // in the `if` condition.
+                ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), new_size);
 
-            // NB: we know it is non-overlapping because of the size check
-            // in the `if` condition.
-            ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), new_size);
-
-            return Ok(new_ptr);
+                return Ok(new_ptr);
+            }
         }
 
         // If this wasn't the last allocation, or shrinking wasn't worth it,

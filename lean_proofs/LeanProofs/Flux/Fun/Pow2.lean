@@ -6,8 +6,8 @@ set_option linter.unusedVariables false
 
 namespace F
 
-noncomputable def pow2 (a'₁₆ : Int) : Prop :=
-  (pow2bv (BitVec.ofInt 64 a'₁₆))
+noncomputable def pow2 (a'₅ : Int) : Prop :=
+  (pow2bv (BitVec.ofInt 64 a'₅))
 
 
 end F
