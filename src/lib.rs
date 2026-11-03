@@ -2043,6 +2043,25 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         self.try_alloc_layout(layout)
     }
 
+    // If `ptr` is the last allocation, tries to grow it in place by bump
+    // allocating `delta_layout` right below it. The result starts the grown
+    // allocation of `old_size + delta_layout.size()` bytes.
+    #[inline]
+    #[flux_rs::trusted(reason = "caller contract: `ptr` is a live allocation of `old_size` bytes from this Bump; if it is the last allocation, the fast path allocates directly below it in the same chunk, so the result covers the old allocation too")]
+    #[flux_rs::spec(fn(&Self, NonNull<u8>, old_size: usize, Layout[@ds, @da])
+        -> Option<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ds + old_size, da)}>)]
+    fn grow_last_allocation(
+        &self,
+        ptr: NonNull<u8>,
+        _old_size: usize,
+        delta_layout: Layout,
+    ) -> Option<NonNull<u8>> {
+        if !self.is_last_allocation(ptr) {
+            return None;
+        }
+        self.try_alloc_layout_fast(delta_layout)
+    }
+
     #[inline]
     #[flux_rs::trusted(reason = "relies on the caller contract that `ptr` is a live allocation from this Bump with `layout`; flux can't relate `ptr` to the current chunk")]
     unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
@@ -2188,9 +2207,13 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             // Try to allocate the delta size within this same block so we can
             // reuse the currently allocated space.
             let delta = new_size - old_size;
-            if let Some(p) =
-                self.try_alloc_layout_fast(layout_from_size_align(delta, old_layout.align())?)
-            {
+            if let Some(p) = self.grow_last_allocation(
+                ptr,
+                old_size,
+                layout_from_size_align(delta, old_layout.align())?,
+            ) {
+                #[cfg(flux)]
+                ptr_align_weaken(p, old_layout.align(), new_layout.align());
                 ptr::copy(ptr.as_ptr(), p.as_ptr(), old_size);
                 return Ok(p);
             }
