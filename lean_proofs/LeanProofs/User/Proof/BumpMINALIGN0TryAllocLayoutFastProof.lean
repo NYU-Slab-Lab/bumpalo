@@ -56,7 +56,7 @@ def BumpMINALIGN0TryAllocLayoutFast_proof : BumpMINALIGN0TryAllocLayoutFast := b
   dsimp only
   intro MA hMA0
   refine ⟨trivial, rfl, ?_⟩
-  intro size align ⟨hMA, hMApow, hMA16⟩ ⟨halign, halignpow⟩ hlay
+  intro size align ⟨hMA, hMApow, hMA16⟩ hsize0 ⟨halign, halignpow⟩ hlay
   refine ⟨?_, ?_, ?_⟩
   · intro v0 hv0; exact ⟨hv0, fun _ => trivial⟩
   · intro a4 h; exact h
@@ -65,7 +65,7 @@ def BumpMINALIGN0TryAllocLayoutFast_proof : BumpMINALIGN0TryAllocLayoutFast := b
   · simp only [footer_ptr, allocated, ptr_non_null_nn_valid, ptr_non_null_nn_dereferenceable,
       ptr_non_null_nn_aligned_to] at *
     omega
-  intro f _ hfs48 _ _ _ v1 ⟨hbf, hv1MA⟩ hv1i _ _ _ hfi _ _ a9 _ _ _ _
+  intro f _ hfs48 _ _ _ v1 ⟨hbf, hv1MA⟩ hv1i _ _ _ hfi _ _ _ a9 _ _ _ _
   -- The `debug_assert!`s on the finger: nothing to carry.
   refine ⟨fun _ => trivial, fun _ => ⟨fun _ _ _ _ => trivial, fun _ => ⟨trivial, fun _ => ?_⟩⟩⟩
   intro _ _ a10 _ ha10
@@ -74,7 +74,7 @@ def BumpMINALIGN0TryAllocLayoutFast_proof : BumpMINALIGN0TryAllocLayoutFast := b
   simp only [bump_finger] at hbf
   refine ⟨?_, ?_, ?_, ?_⟩
   -- `align < MIN_ALIGN`: bump down by `size` rounded up to `MIN_ALIGN`.
-  · intro hord _
+  · intro hord
     have hlt : align < a10 := by rcases ord_lt hord with h|h|h <;> omega
     refine ⟨fun r hr => hr, ?_⟩
     intro _ a12 ha12r _
@@ -90,7 +90,7 @@ def BumpMINALIGN0TryAllocLayoutFast_proof : BumpMINALIGN0TryAllocLayoutFast := b
     obtain ⟨_, hr⟩ := ha12r
     rcases hMAc with h|h|h|h|h <;> rcases halc with h'|h'|h'|h'|h' <;> subst h h' <;> omega
   -- `align == MIN_ALIGN`: bump down by `size` rounded up to `align`.
-  · intro hord _
+  · intro hord
     have heq : align = a10 := by rcases ord_lt hord with h|h|h <;> omega
     subst heq
     refine ⟨⟨halignpow, by simp only [can_round_up, num_usize_MAX, num_isize_MAX] at *; omega⟩, ?_⟩
@@ -104,7 +104,7 @@ def BumpMINALIGN0TryAllocLayoutFast_proof : BumpMINALIGN0TryAllocLayoutFast := b
     rw [hsub]
     exact sub_emod_zero _ _ _ hv1MA has0.2
   -- `align > MIN_ALIGN`: round the finger down to `align`, then bump down.
-  · intro hord _
+  · intro hord
     have hgt : a10 < align := by rcases ord_lt hord with h|h|h <;> omega
     refine ⟨⟨halignpow, by simp only [can_round_up, num_usize_MAX, num_isize_MAX] at *; omega⟩, ?_⟩
     intro as1 has1 _

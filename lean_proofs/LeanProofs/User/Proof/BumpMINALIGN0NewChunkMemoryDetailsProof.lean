@@ -37,7 +37,7 @@ def BumpMINALIGN0NewChunkMemoryDetails_proof : BumpMINALIGN0NewChunkMemoryDetail
   dsimp only
   intro MA _
   refine ⟨trivial, rfl, trivial, rfl, ?_⟩
-  intro ⟨hMA, hMApow, hMA16⟩ ns0 lay ⟨hal, halpow⟩ hlay _ _ _
+  intro ⟨hMA, hMApow, hMA16⟩ ns0 lay hsize ⟨hal, halpow⟩ hlay _ _ _
   simp only [CHUNK_ALIGN] at hMA16
   obtain ⟨hA, hA16, hAal⟩ := chunk_align_cases MA lay.align
   have hApow : pow2 (num_max (num_max 16 MA) lay.align) := by
@@ -46,7 +46,7 @@ def BumpMINALIGN0NewChunkMemoryDetails_proof : BumpMINALIGN0NewChunkMemoryDetail
     · exact hMApow
     · exact halpow
   refine ⟨fun _ => trivial, trivial, ?_⟩
-  intro ns1 _ hns1 hsize
+  intro ns1 _ hns1
   refine ⟨⟨by omega, hApow⟩, fun _ _ => trivial, ?_⟩
   intro rs _ hrs hmax
   have hmax1 : ns1 ≤ num_max ns1 rs ∧ rs ≤ num_max ns1 rs := by

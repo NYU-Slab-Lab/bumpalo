@@ -2082,11 +2082,11 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         }
 
         debug_assert!(is_pointer_aligned_to(ptr.as_ptr(), new_layout.align()));
+        #[cfg(flux)]
+        ptr_align_weaken(ptr, old_layout.align(), new_layout.align());
 
         let old_size = old_layout.size();
         let new_size = new_layout.size();
-        #[cfg(flux)]
-        ptr_align_weaken(ptr, old_layout.align(), new_layout.align());
 
         // This is how much space we would *actually* reclaim while satisfying
         // the requested alignment.

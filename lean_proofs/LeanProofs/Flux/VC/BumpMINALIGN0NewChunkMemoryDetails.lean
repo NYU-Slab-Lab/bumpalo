@@ -30,18 +30,18 @@ def BumpMINALIGN0NewChunkMemoryDetails := ∃ k3 : Prop, ∃ k4 : (a0 : Int) -> 
    (((constgen_MIN_ALIGN_0 > 0) ∧ (pow2 constgen_MIN_ALIGN_0) ∧ (constgen_MIN_ALIGN_0 ≤ CHUNK_ALIGN)) ->
     ∀ (new_size_without_footer₀ : OptionOption),
      ∀ (requested_layout₀ : AllocLayoutLayout),
-      (((AllocLayoutLayout.align requested_layout₀) > 0) ∧ (alloc_layout_pow2 (AllocLayoutLayout.align requested_layout₀))) ->
-       (((((AllocLayoutLayout.size requested_layout₀) + (AllocLayoutLayout.align requested_layout₀)) - 1) ≤ num_isize_MAX)) ->
-        (((num_max 16 constgen_MIN_ALIGN_0) ≥ 0)) ->
-         (((AllocLayoutLayout.align requested_layout₀) ≥ 0)) ->
-          (((num_max (num_max 16 constgen_MIN_ALIGN_0) (AllocLayoutLayout.align requested_layout₀)) ≥ 0)) ->
-           (∀ (a'₂ : Int),
-            (k7 a'₂ constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ∧
-           ((k7 448 constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ∧
-           (∀ (new_size_without_footer₁ : Int),
-            ((k7 new_size_without_footer₁ constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ->
-             ((new_size_without_footer₁ ≥ 0)) ->
-              (((AllocLayoutLayout.size requested_layout₀) ≥ 0)) ->
+      (((AllocLayoutLayout.size requested_layout₀) ≥ 0)) ->
+       (((AllocLayoutLayout.align requested_layout₀) > 0) ∧ (alloc_layout_pow2 (AllocLayoutLayout.align requested_layout₀))) ->
+        (((((AllocLayoutLayout.size requested_layout₀) + (AllocLayoutLayout.align requested_layout₀)) - 1) ≤ num_isize_MAX)) ->
+         (((num_max 16 constgen_MIN_ALIGN_0) ≥ 0)) ->
+          (((AllocLayoutLayout.align requested_layout₀) ≥ 0)) ->
+           (((num_max (num_max 16 constgen_MIN_ALIGN_0) (AllocLayoutLayout.align requested_layout₀)) ≥ 0)) ->
+            (∀ (a'₂ : Int),
+             (k7 a'₂ constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ∧
+            ((k7 448 constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ∧
+            (∀ (new_size_without_footer₁ : Int),
+             ((k7 new_size_without_footer₁ constgen_MIN_ALIGN_0 (OptionOption.is_some new_size_without_footer₀) (AllocLayoutLayout.size requested_layout₀) (AllocLayoutLayout.align requested_layout₀))) ->
+              ((new_size_without_footer₁ ≥ 0)) ->
                ((((num_max (num_max 16 constgen_MIN_ALIGN_0) (AllocLayoutLayout.align requested_layout₀)) > 0)) ∧
                ((pow2 (num_max (num_max 16 constgen_MIN_ALIGN_0) (AllocLayoutLayout.align requested_layout₀))))
                ) ∧
@@ -107,6 +107,6 @@ def BumpMINALIGN0NewChunkMemoryDetails := ∃ k3 : Prop, ∃ k4 : (a0 : Int) -> 
                      )
                    )
                )
-           )
+            )
    
 end F
