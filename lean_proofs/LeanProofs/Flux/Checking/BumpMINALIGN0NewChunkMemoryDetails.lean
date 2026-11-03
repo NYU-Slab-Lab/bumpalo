@@ -1,0 +1,5 @@
+import LeanProofs.Flux.VC.BumpMINALIGN0NewChunkMemoryDetails
+import LeanProofs.User.Proof.BumpMINALIGN0NewChunkMemoryDetailsProof
+
+#check (F.BumpMINALIGN0NewChunkMemoryDetails_proof : F.BumpMINALIGN0NewChunkMemoryDetails)
+#print axioms F.BumpMINALIGN0NewChunkMemoryDetails_proof

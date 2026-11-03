@@ -25,11 +25,35 @@ flux_rs::defs! {
 #[spec(fn(T[@a], T[@b]) -> T{v: <T as Ord>::min_res(a, b, v)})]
 fn min<T: Ord>(v1: T, v2: T) -> T;
 
+// flux-core doesn't refine `Ordering` or `Ord::cmp`, so matching on `a.cmp(&b)` teaches flux
+// nothing about `a` and `b`.
+#[extern_spec(core::cmp)]
+#[refined_by(ord: int)]
+enum Ordering {
+    #[variant(Ordering[-1])]
+    Less,
+    #[variant(Ordering[0])]
+    Equal,
+    #[variant(Ordering[1])]
+    Greater,
+}
+
+#[extern_spec(core::cmp)]
+impl Ord for usize {
+    #[spec(fn(&usize[@a], &usize[@b]) -> Ordering[if a < b { -1 } else if a == b { 0 } else { 1 }])]
+    fn cmp(&self, other: &usize) -> Ordering;
+}
+
 #[extern_spec(core::num)]
 impl usize {
     #[flux_rs::no_panic]
     #[spec(fn(n: usize) -> bool[n > 0 && pow2(n)])]
     const fn is_power_of_two(self) -> bool;
+
+    // Overflow (`n > 2^63`) panics in debug builds and returns 0 in release builds.
+    #[spec(fn(n: usize) -> usize{r: r >= n && pow2(r) && (n <= 1 || r < 2 * n)}
+        requires n <= 9223372036854775808)]
+    const fn next_power_of_two(self) -> usize;
 }
 
 #[extern_spec(crate::core_alloc::alloc)]

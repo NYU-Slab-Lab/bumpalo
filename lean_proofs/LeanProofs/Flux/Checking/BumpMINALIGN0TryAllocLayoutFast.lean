@@ -1,0 +1,5 @@
+import LeanProofs.Flux.VC.BumpMINALIGN0TryAllocLayoutFast
+import LeanProofs.User.Proof.BumpMINALIGN0TryAllocLayoutFastProof
+
+#check (F.BumpMINALIGN0TryAllocLayoutFast_proof : F.BumpMINALIGN0TryAllocLayoutFast)
+#print axioms F.BumpMINALIGN0TryAllocLayoutFast_proof

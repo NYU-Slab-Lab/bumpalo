@@ -484,17 +484,6 @@ impl EmptyChunkFooter {
 }
 
 impl ChunkFooter {
-    // Returns a pointer to this footer, which is also the end of the chunk's
-    // allocatable region (where the bump finger starts).
-    #[flux_rs::trusted(reason = "the footer is placed at the end of its own chunk")]
-    #[flux_rs::spec(fn(&ChunkFooter[@b, @a, @s, @_al, @_m]) -> NonNull<u8>{v:
-        v.base == b
-        && v.addr == a + s - <ChunkFooter as Sized>::size_of()
-        && v.size == <ChunkFooter as Sized>::size_of()})]
-    fn data_end(&self) -> NonNull<u8> {
-        NonNull::from(self).cast()
-    }
-
     // Returns the start and length of the currently allocated region of this
     // chunk.
     #[flux::trusted(
@@ -724,7 +713,7 @@ const DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER: usize = FIRST_ALLOCATION_GOAL - OVERHEA
 #[flux::invariant(align > 0)]
 #[flux::invariant(align % <ChunkFooter as Sized>::align_of() == 0)]
 #[flux::invariant(payload % <ChunkFooter as Sized>::align_of() == 0)]
-#[flux::invariant(payload > 0)]
+#[flux::invariant(payload >= 0)]
 #[derive(Debug, Clone, Copy)]
 struct NewChunkMemoryDetails {
     #[flux::field(usize[payload])]
@@ -1049,7 +1038,11 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// Determine the memory details including final size, alignment and final
     /// size without footer for a new chunk that would be allocated to fulfill
     /// an allocation request.
-    #[flux::trusted] // TODO: this blows up
+    // The size arithmetic is proved in Lean, see
+    // `lean_proofs/LeanProofs/User/Proof/BumpMINALIGN0NewChunkMemoryDetailsProof.lean`.
+    #[flux::proven_externally]
+    #[flux::spec(fn(Option<usize>, Layout) -> Option<NewChunkMemoryDetails>
+        requires MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
     fn new_chunk_memory_details(
         new_size_without_footer: Option<usize>,
         requested_layout: Layout,
@@ -1218,7 +1211,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 "bump pointer {cur_chunk:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
             );
             let footer = cur_chunk.as_ref();
-            footer.ptr.set(footer.data_end());
+            footer.ptr.set(footer.data.add(footer.layout.size() - FOOTER_SIZE));
 
             // Reset the allocated size of the chunk.
             cur_chunk.as_mut().allocated_bytes = cur_chunk.as_ref().layout.size() - FOOTER_SIZE;
@@ -1378,7 +1371,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
 
             // Reset the current chunk to the start.
             let footer = cur_chunk.as_ref();
-            footer.ptr.set(footer.data_end());
+            footer.ptr.set(footer.data.add(footer.layout.size() - FOOTER_SIZE));
 
             // Recalculate allocated bytes for the current chunk in case there
             // were chunks freed.
@@ -1615,7 +1608,6 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     ///
     /// Errors if reserving space matching `layout` fails.
     #[inline(always)]
-    #[flux_rs::trusted(reason = "TODO: needs the ChunkFooter.ptr invariant")]
     #[flux_rs::spec(fn(&Self, Layout[@size, @align])
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}, AllocErr>)]
     pub fn try_alloc_layout(&self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
@@ -1626,7 +1618,21 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         }
     }
 
+    // Reads the bump finger of a chunk owned by this `Bump`.
     #[inline(always)]
+    #[flux_rs::trusted(reason = "every chunk owned by a `Bump<MIN_ALIGN>` keeps its bump finger `MIN_ALIGN`-aligned; flux can't state this as a `ChunkFooter` invariant since `MIN_ALIGN` is a parameter of `Bump`")]
+    #[flux_rs::spec(fn(&ChunkFooter[@b, @a, @s, @_al, @_m]) -> NonNull<u8>{v:
+        bump_finger(b, a, s, v.base, v.addr, v.size) && v.addr % MIN_ALIGN == 0})]
+    fn bump_finger(footer: &ChunkFooter) -> NonNull<u8> {
+        footer.ptr.get()
+    }
+
+    #[inline(always)]
+    // The alignment arithmetic is proved in Lean, see
+    // `lean_proofs/LeanProofs/User/Proof/BumpMINALIGN0TryAllocLayoutFastProof.lean`.
+    #[flux_rs::proven_externally]
+    #[flux_rs::spec(fn(&Self, Layout[@size, @align])
+        -> Option<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}>)]
     fn try_alloc_layout_fast(&self, layout: Layout) -> Option<NonNull<u8>> {
         // We don't need to check for ZSTs here since they will automatically
         // be handled properly: the pointer will be bumped by zero bytes,
@@ -1636,7 +1642,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             let footer_ptr = self.current_chunk_footer.get();
             let footer = footer_ptr.as_ref();
 
-            let ptr = footer.ptr.get().as_ptr();
+            let ptr = Self::bump_finger(footer).as_ptr();
             let start = footer.data.as_ptr();
             debug_assert!(
                 start <= ptr,
@@ -1744,6 +1750,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// parent bump set because there isn't enough room in our current chunk.
     #[inline(never)]
     #[cold]
+    #[flux_rs::spec(fn(&Self, Layout[@size, @align])
+        -> Option<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}>)]
     fn alloc_layout_slow(&self, layout: Layout) -> Option<NonNull<u8>> {
         unsafe {
             let allocation_limit_remaining = self.allocation_limit_remaining();
@@ -1980,6 +1988,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
+    #[flux_rs::trusted(reason = "relies on the caller contract that `ptr` is a live allocation from this Bump with `layout`; flux can't relate `ptr` to the current chunk")]
     unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
         // If the pointer is the last allocation we made, we can reuse the bytes,
         // otherwise they are simply leaked -- at least until somebody calls reset().

@@ -18,6 +18,8 @@ all-features = true
 
 [package.metadata.flux]
 enabled = true
+# `#[proven_externally]` items are proved in `lean_proofs/`.
+lean = "check"
 
 [lib]
 path = "src/lib.rs"
