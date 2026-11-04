@@ -593,7 +593,6 @@ fn ptr_align_add(_p: NonNull<u8>, _d: usize, _align: usize) {}
 
 #[inline]
 #[flux::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
-#[flux::trusted(reason = "hangs: nonlinear `%` by a variable; same root cause as round_up_to")]
 fn is_pointer_aligned_to<T>(pointer: *mut T, align: usize) -> bool {
     debug_assert!(align.is_power_of_two());
 
