@@ -12,12 +12,13 @@ use core::ptr::{self, NonNull};
 use core::slice;
 use core::str;
 
-/// Lemma: the `n` elements at `src`, read from a live `&[T]`, don't overlap the `n` elements at
-/// `dst`, which point into memory owned through `&mut self`.
+/// Assumes the `n` elements at `src` and at `dst` don't overlap. Only call this where `src`
+/// comes from a live `&[T]` and `dst` points into memory owned through `&mut self`: Rust's
+/// aliasing rules make those disjoint, but flux can't check it.
 #[cfg(flux)]
-#[flux_rs::trusted(reason = "holds by Rust's aliasing rules: a live shared slice can't overlap memory owned through `&mut self`")]
+#[flux_rs::trusted(reason = "assumption: callers pass a pointer from a live `&[T]` and one into memory owned through `&mut self`, which Rust's aliasing rules keep disjoint")]
 #[flux_rs::spec(fn(src: *const[@s] T, n: usize, dst: *mut[@d] T) -> {() | nonoverlapping(s, d, n * T::size_of())})]
-fn shared_slice_disjoint<T>(_src: *const T, _n: usize, _dst: *mut T) {}
+fn assume_disjoint<T>(_src: *const T, _n: usize, _dst: *mut T) {}
 
 /// An in-place allocation builder for a single value of type `T`.
 ///
@@ -839,7 +840,7 @@ where
             let src_ptr = src.as_ptr();
             let dst = self.base_ptr().add(self.len);
             #[cfg(flux)]
-            shared_slice_disjoint(src_ptr, src.len(), dst);
+            assume_disjoint(src_ptr, src.len(), dst);
             ptr::copy_nonoverlapping(src_ptr, dst, src.len());
         }
         self.len += src.len();
@@ -1004,7 +1005,7 @@ where
             let src_ptr = from.as_ptr();
             let dst = self.base_ptr();
             #[cfg(flux)]
-            shared_slice_disjoint(src_ptr, from.len(), dst);
+            assume_disjoint(src_ptr, from.len(), dst);
             ptr::copy_nonoverlapping(src_ptr, dst, from.len());
         }
         self.len = from.len();
