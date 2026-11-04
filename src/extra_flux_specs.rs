@@ -10,6 +10,8 @@ flux_rs::defs! {
     use crate::pow2;
     use flux_core::ptr::aligned_to;
     use flux_core::ptr::valid;
+    use flux_core::num::max;
+    use flux_core::num::min;
 }
 
 // #[extern_spec(core::ptr)]
@@ -38,10 +40,22 @@ enum Ordering {
     Greater,
 }
 
+// This replaces flux-core's spec for `impl Ord for usize` (a local extern spec shadows the upstream
+// one), so it repeats flux-core's `min_res`/`max_res`, `min` and `max`, and adds `cmp`.
 #[extern_spec(core::cmp)]
+#[flux_rs::assoc(
+    fn min_res(a: int, b: int, res: int) -> bool { res == min(a, b) }
+    fn max_res(a: int, b: int, res: int) -> bool { res == max(a, b) }
+)]
 impl Ord for usize {
     #[spec(fn(&usize[@a], &usize[@b]) -> Ordering[if a < b { -1 } else if a == b { 0 } else { 1 }])]
     fn cmp(&self, other: &usize) -> Ordering;
+
+    #[spec(fn(usize[@a], usize[@b]) -> usize[min(a, b)])]
+    fn min(self, other: usize) -> usize;
+
+    #[spec(fn(usize[@a], usize[@b]) -> usize[max(a, b)])]
+    fn max(self, other: usize) -> usize;
 }
 
 #[extern_spec(core::num)]
