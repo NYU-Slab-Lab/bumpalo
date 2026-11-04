@@ -882,6 +882,9 @@ where
     {
         self.try_reserve_exact(src.len())?;
         for val in src.iter().cloned() {
+            // Loop invariant: the pushed elements plus the ones left fit in the capacity.
+            #[cfg(flux)]
+            flux_rs::macros::qualifier!(len: int, cap: int, idx: int, n: int ; len + n - idx <= cap);
             unsafe {
                 ptr::write(self.base_ptr().add(self.len), val);
             }
