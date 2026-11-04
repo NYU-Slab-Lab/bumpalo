@@ -26,6 +26,14 @@ use core::usize;
 
 pub use core::alloc::{Layout, LayoutErr};
 
+/// Assumes the `old_size` bytes at `old` and the `new_size` bytes at `new` don't overlap. Only
+/// call this where `old` is a live block of an allocator and `new` was just allocated by it.
+#[cfg(flux)]
+#[flux_rs::trusted(reason = "assumption: callers pass a live block (the caller contract) and a block the allocator just returned, and a fresh allocation never overlaps a live one")]
+#[flux_rs::spec(fn(NonNull<u8>[@_ob, @oa, @_os, @_om], old_size: usize, NonNull<u8>[@_nb, @na, @_ns, @_nm], new_size: usize)
+    -> {() | oa + old_size <= na || na + new_size <= oa})]
+fn assume_fresh_disjoint(_old: NonNull<u8>, _old_size: usize, _new: NonNull<u8>, _new_size: usize) {}
+
 fn new_layout_err() -> LayoutErr {
     Layout::from_size_align(1, 3).unwrap_err()
 }
@@ -406,6 +414,9 @@ pub unsafe trait Alloc {
         let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
         let result = self.alloc(new_layout);
         if let Ok(new_ptr) = result {
+            // A fresh allocation can't overlap the older block.
+            #[cfg(flux)]
+            assume_fresh_disjoint(ptr, old_size, new_ptr, new_size);
             ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), cmp::min(old_size, new_size));
             self.dealloc(ptr, layout);
         }
