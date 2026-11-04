@@ -1,6 +1,7 @@
 #![flux::defs(
     use crate::allocated;
     use crate::valid_array_layout;
+    use flux_core::ptr::nonoverlapping;
 )]
 
 use super::{oom, AllocErr, Bump, RewindGuard};
@@ -10,6 +11,13 @@ use core::mem::{self, MaybeUninit};
 use core::ptr::{self, NonNull};
 use core::slice;
 use core::str;
+
+/// Lemma: the `n` elements at `src`, read from a live `&[T]`, don't overlap the `n` elements at
+/// `dst`, which point into memory owned through `&mut self`.
+#[cfg(flux)]
+#[flux_rs::trusted(reason = "holds by Rust's aliasing rules: a live shared slice can't overlap memory owned through `&mut self`")]
+#[flux_rs::spec(fn(src: *const[@s] T, n: usize, dst: *mut[@d] T) -> {() | nonoverlapping(s, d, n * T::size_of())})]
+fn shared_slice_disjoint<T>(_src: *const T, _n: usize, _dst: *mut T) {}
 
 /// An in-place allocation builder for a single value of type `T`.
 ///
@@ -828,7 +836,11 @@ where
     {
         self.try_reserve_exact(src.len())?;
         unsafe {
-            ptr::copy_nonoverlapping(src.as_ptr(), self.base_ptr().add(self.len), src.len());
+            let src_ptr = src.as_ptr();
+            let dst = self.base_ptr().add(self.len);
+            #[cfg(flux)]
+            shared_slice_disjoint(src_ptr, src.len(), dst);
+            ptr::copy_nonoverlapping(src_ptr, dst, src.len());
         }
         self.len += src.len();
         Ok(())
@@ -989,7 +1001,11 @@ where
     {
         self.try_grow(from.len())?;
         unsafe {
-            ptr::copy_nonoverlapping(from.as_ptr(), self.base_ptr(), from.len());
+            let src_ptr = from.as_ptr();
+            let dst = self.base_ptr();
+            #[cfg(flux)]
+            shared_slice_disjoint(src_ptr, from.len(), dst);
+            ptr::copy_nonoverlapping(src_ptr, dst, from.len());
         }
         self.len = from.len();
         Ok(self.into_mut_slice())
