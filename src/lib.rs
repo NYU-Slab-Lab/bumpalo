@@ -453,6 +453,7 @@ struct EmptyChunkFooter(ChunkFooter);
 
 unsafe impl Sync for EmptyChunkFooter {}
 
+#[flux_rs::trusted(reason = "`data` and `ptr` are both this static's own address, which flux can't tell from two separate casts of `&EMPTY_CHUNK`")]
 #[flux_rs::spec(EmptyChunkFooter)]
 static EMPTY_CHUNK: EmptyChunkFooter = EmptyChunkFooter(ChunkFooter {
     // This chunk is empty (except the foot itself).
