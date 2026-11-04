@@ -487,15 +487,18 @@ impl EmptyChunkFooter {
 impl ChunkFooter {
     // Returns the start and length of the currently allocated region of this
     // chunk.
-    #[flux::trusted(
-        reason = "hangs, will investigate later"
-    )]
+    #[flux_rs::spec(fn(&ChunkFooter[@base, @addr, @size, @_align, @_meta]) -> {start: int.
+        (*const[base, start, addr + size - start] u8,
+         usize[addr + size - <ChunkFooter as Sized>::size_of() - start])
+        | addr <= start && start <= addr + size - <ChunkFooter as Sized>::size_of()})]
     fn as_raw_parts(&self) -> (*const u8, usize) {
         let data = self.data.as_ptr() as *const u8;
         let ptr = self.ptr.get().as_ptr() as *const u8;
         debug_assert!(data <= ptr);
         debug_assert!(ptr <= self as *const ChunkFooter as *const u8);
-        let len = unsafe { (self as *const ChunkFooter as *const u8).offset_from(ptr) as usize };
+        // The footer is the last `FOOTER_SIZE` bytes of the chunk.
+        let footer = unsafe { self.data.as_ptr().add(self.layout.size() - FOOTER_SIZE) } as *const u8;
+        let len = unsafe { footer.offset_from(ptr) as usize };
         (ptr, len)
     }
 
