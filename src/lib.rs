@@ -508,9 +508,15 @@ impl ChunkFooter {
 ///
 /// This can be used to perform a partial reset of a `Bump`
 #[derive(Debug, Clone, Copy)]
+#[flux_rs::refined_by(cb: int, ca: int, cs: int, cm: int)]
 pub struct RawCheckpoint {
-    #[flux::field(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)})]
+    #[flux::field({NonNull<ChunkFooter>[cb, ca, cs, cm] | footer_ptr(cb, ca, cs)})]
     chunk: NonNull<ChunkFooter>,
+    // The bump finger of `chunk` when the checkpoint was taken: in the chunk's
+    // allocation, between its data (which starts at the allocation's base)
+    // and its footer.
+    #[flux::field(NonNull<u8>{v: v.base == cb && cb <= v.addr && v.addr <= ca
+        && v.addr + v.size == ca + <ChunkFooter as Sized>::size_of()})]
     ptr: NonNull<u8>,
 }
 
@@ -1263,7 +1269,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// See [`Bump::reset_to_raw_checkpoint`] for details.
     pub fn raw_checkpoint(&self) -> RawCheckpoint {
         let chunk = self.current_chunk_footer.get();
-        let chunk_ref = unsafe { chunk.as_ref() };
+        let chunk_ref = unsafe { Self::footer_of(chunk) };
 
         RawCheckpoint {
             chunk,
@@ -1351,7 +1357,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     pub unsafe fn reset_to_raw_checkpoint(&self, checkpoint: RawCheckpoint) {
         let mut cur_chunk = self.current_chunk_footer.get();
 
-        if checkpoint.chunk == cur_chunk {
+        if Self::same_chunk(checkpoint.chunk, cur_chunk) {
             debug_assert!(
                 is_pointer_aligned_to(checkpoint.ptr.as_ptr(), MIN_ALIGN),
                 "checkpoint ptr is not aligned to bump's alignment"
@@ -1380,10 +1386,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             // Re-alloc edge case means that the current pointer may be greater
             // than that of the checkpoint, so reset to whichever one is
             // greater.
-            cur_chunk
-                .as_ref()
-                .ptr
-                .set(max(checkpoint.ptr, cur_chunk.as_ref().ptr.get()));
+            let footer = Self::footer_of(cur_chunk);
+            footer.ptr.set(max(checkpoint.ptr, footer.ptr.get()));
         } else {
             // Replace the previous chunk pointer with the one in the
             // checkpoint.
@@ -2025,6 +2029,28 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         } else {
             None
         }
+    }
+
+    // Dereferences a pointer to one of this `Bump`'s chunk footers. The footer
+    // is the last `FOOTER_SIZE` bytes of its chunk, whose data starts at the
+    // allocation's base.
+    #[inline]
+    #[flux_rs::trusted(reason = "every footer sits at the end of its own chunk: `new_chunk` places it at `data + size - FOOTER_SIZE`, and `EMPTY_CHUNK`'s data is the footer itself")]
+    #[flux_rs::spec(fn(NonNull<ChunkFooter>[@pb, @pa, @ps, @_pm]) -> &ChunkFooter{f:
+            f.base == pb && pa + <ChunkFooter as Sized>::size_of() == f.addr + f.size}
+        requires footer_ptr(pb, pa, ps))]
+    unsafe fn footer_of<'a>(footer: NonNull<ChunkFooter>) -> &'a ChunkFooter {
+        footer.as_ref()
+    }
+
+    // Compares pointers to two of this `Bump`'s chunk footers, like `==`. Equal
+    // footers also belong to the same allocation, i.e. have the same `base`.
+    #[inline]
+    #[flux_rs::trusted(reason = "live chunks never share a footer address, so equal footer pointers belong to the same chunk allocation; that both chunks are live is the caller contract of `reset_to_raw_checkpoint`")]
+    #[flux_rs::spec(fn(NonNull<ChunkFooter>[@ab, @aa, @_as, @_am], NonNull<ChunkFooter>[@bb, @ba, @_bs, @_bm])
+        -> bool{r: (r => aa == ba && ab == bb) && (aa == ba => r)})]
+    fn same_chunk(a: NonNull<ChunkFooter>, b: NonNull<ChunkFooter>) -> bool {
+        a == b
     }
 
     // Like `try_alloc_layout`, but also returns that the fresh allocation
