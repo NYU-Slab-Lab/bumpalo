@@ -27,6 +27,24 @@ flux_rs::defs! {
 #[spec(fn(T[@a], T[@b]) -> T{v: <T as Ord>::min_res(a, b, v)})]
 fn min<T: Ord>(v1: T, v2: T) -> T;
 
+// flux-core specs the `Ord::max` method but not the free function `core::cmp::max`.
+#[extern_spec(core::cmp)]
+#[spec(fn(T[@a], T[@b]) -> T{v: <T as Ord>::max_res(a, b, v)})]
+fn max<T: Ord>(v1: T, v2: T) -> T;
+
+// flux-core has no `Ord` spec for `NonNull`, which compares addresses. As in std's `min_by` and
+// `max_by`, ties go to the first argument for `min` and to the second for `max`.
+#[extern_spec(core::ptr)]
+#[flux_rs::assoc(
+    fn min_res(a: NonNull, b: NonNull, res: NonNull) -> bool {
+        if a.addr <= b.addr { res == a } else { res == b }
+    }
+    fn max_res(a: NonNull, b: NonNull, res: NonNull) -> bool {
+        if a.addr > b.addr { res == a } else { res == b }
+    }
+)]
+impl<T: ?Sized> Ord for core::ptr::NonNull<T> {}
+
 // flux-core doesn't refine `Ordering` or `Ord::cmp`, so matching on `a.cmp(&b)` teaches flux
 // nothing about `a` and `b`.
 #[extern_spec(core::cmp)]
