@@ -14,14 +14,6 @@ flux_rs::defs! {
     use flux_core::num::min;
 }
 
-// #[extern_spec(core::ptr)]
-// impl<T> core::ptr::NonNull<T> {
-//     // TODO: this is broken because we need T : Sized for this spec
-//     // ideally we want a way to do this conditionally in the spec
-//     #[spec(fn(&mut NonNull<T>[@b, @a, @s]) -> &mut T requires a >= b && s >= T::size_of() && a % T::align_of() == 0)]
-//     unsafe fn as_mut<'a>(&mut self) -> &'a mut T;
-// }
-
 // flux-core specs the `Ord::min` method but not the free function `core::cmp::min`.
 #[extern_spec(core::cmp)]
 #[spec(fn(T[@a], T[@b]) -> T{v: <T as Ord>::min_res(a, b, v)})]
@@ -93,8 +85,7 @@ impl usize {
     Layout[@size, @align]
 ) -> *mut{p:
     p.addr == 0 ||
-    (p.addr == p.base && p.size == size && aligned_to(p, align)
-        && p.addr >= 0) // needed for some reason
+    (p.addr == p.base && p.size == size && aligned_to(p, align))
 } u8
     requires size > 0
 )]

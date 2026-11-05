@@ -398,7 +398,6 @@ impl<const MIN_ALIGN: usize> Drop for RewindGuard<'_, MIN_ALIGN> {
 /// assert_eq!(bump.allocation_limit(), None);
 /// ```
 #[derive(Debug)]
-
 #[flux_rs::invariant(MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
 pub struct Bump<const MIN_ALIGN: usize = 1> {
     // The current chunk we are bump allocating within.
@@ -735,8 +734,8 @@ struct NewChunkMemoryDetails {
 
 /// Wrapper around `Layout::from_size_align` that adds debug assertions.
 #[inline]
-  #[flux::spec(fn(size: usize, align: usize)
-      -> Result<Layout[size, align], AllocErr>[is_valid_layout(size, align)])]
+#[flux::spec(fn(size: usize, align: usize)
+    -> Result<Layout[size, align], AllocErr>[is_valid_layout(size, align)])]
 fn layout_from_size_align(size: usize, align: usize) -> Result<Layout, AllocErr> {
     Layout::from_size_align(size, align).map_err(|_| AllocErr)
 }
