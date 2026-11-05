@@ -7,16 +7,16 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![flux::defs(
-    use crate::is_valid_layout;
-    use crate::allocated;
-)]
-
 #![allow(unstable_name_collisions)]
 #![allow(dead_code)]
 #![allow(deprecated)]
 
 //! Memory allocation APIs
+
+flux_rs::defs! {
+    use crate::is_valid_layout;
+    use crate::allocated;
+}
 
 use core::cmp;
 use core::fmt;

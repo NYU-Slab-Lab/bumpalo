@@ -1,8 +1,8 @@
-#![flux::defs(
+flux_rs::defs! {
     use crate::allocated;
     use crate::valid_array_layout;
     use flux_core::ptr::nonoverlapping;
-)]
+}
 
 use super::{oom, AllocErr, Bump, RewindGuard};
 use core::alloc::Layout;

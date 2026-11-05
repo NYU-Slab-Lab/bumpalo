@@ -4,7 +4,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(flux, feature(sized_hierarchy))]
 #![cfg_attr(feature = "allocator_api", feature(allocator_api))]
-#![flux::defs {
+flux_rs::defs! {
     fn pow2(x: int) -> bool {
         x == 1 || x == 2 || x == 4 || x == 8 || x == 16 || x == 32 || x == 64 || x == 128 || x == 256 || x == 512 || x == 1024 || x == 2048 || x == 4096 || x == 8192 || x == 16384 || x == 32768 || x == 65536 || x == 131072 || x == 262144 || x == 524288 || x == 1048576 || x == 2097152 || x == 4194304 || x == 8388608 || x == 16777216 || x == 33554432 || x == 67108864 || x == 134217728 || x == 268435456 || x == 536870912 || x == 1073741824 || x == 2147483648 || x == 4294967296 || x == 8589934592 || x == 17179869184 || x == 34359738368 || x == 68719476736 || x == 137438953472 || x == 274877906944 || x == 549755813888 || x == 1099511627776 || x == 2199023255552 || x == 4398046511104 || x == 8796093022208 || x == 17592186044416 || x == 35184372088832 || x == 70368744177664 || x == 140737488355328 || x == 281474976710656 || x == 562949953421312 || x == 1125899906842624 || x == 2251799813685248 || x == 4503599627370496 || x == 9007199254740992 || x == 18014398509481984 || x == 36028797018963968 || x == 72057594037927936 || x == 144115188075855872 || x == 288230376151711744 || x == 576460752303423488 || x == 1152921504606846976 || x == 2305843009213693952 || x == 4611686018427387904 || x == 9223372036854775808
     }
@@ -63,12 +63,14 @@
     qualifier FooterSize(size: int) { size >= <ChunkFooter as Sized>::size_of() }
     qualifier FooterAlign(addr: int) { addr % <ChunkFooter as Sized>::align_of() == 0 }
 
-}]
+}
 
 #[doc(hidden)]
 pub extern crate alloc as core_alloc;
 
+#[cfg(flux)]
 extern crate flux_core;
+#[cfg(flux)]
 mod extra_flux_specs;
 
 #[cfg(feature = "boxed")]
@@ -401,7 +403,7 @@ impl<const MIN_ALIGN: usize> Drop for RewindGuard<'_, MIN_ALIGN> {
 #[flux_rs::invariant(MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
 pub struct Bump<const MIN_ALIGN: usize = 1> {
     // The current chunk we are bump allocating within.
-    #[flux::field(Cell<NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}>)]
+    #[cfg_attr(flux, flux::field(Cell<NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}>))]
     current_chunk_footer: Cell<NonNull<ChunkFooter>>,
     allocation_limit: Cell<Option<usize>>,
 }
@@ -513,12 +515,12 @@ impl ChunkFooter {
 #[derive(Debug, Clone, Copy)]
 #[flux_rs::refined_by(cb: int, ca: int, cs: int, cm: int)]
 pub struct RawCheckpoint {
-    #[flux::field({NonNull<ChunkFooter>[cb, ca, cs, cm] | footer_ptr(cb, ca, cs)})]
+    #[flux_rs::field({NonNull<ChunkFooter>[cb, ca, cs, cm] | footer_ptr(cb, ca, cs)})]
     chunk: NonNull<ChunkFooter>,
     // The bump finger of `chunk` when the checkpoint was taken: in the chunk's
     // allocation, between its data (which starts at the allocation's base)
     // and its footer.
-    #[flux::field(NonNull<u8>{v: v.base == cb && cb <= v.addr && v.addr <= ca
+    #[flux_rs::field(NonNull<u8>{v: v.base == cb && cb <= v.addr && v.addr <= ca
         && v.addr + v.size == ca + <ChunkFooter as Sized>::size_of()})]
     ptr: NonNull<u8>,
 }
@@ -570,7 +572,7 @@ unsafe fn dealloc_chunks_until_stop(
 unsafe impl<const MIN_ALIGN: usize> Send for Bump<MIN_ALIGN> {}
 
 #[inline]
-#[flux::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
+#[flux_rs::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
 fn is_pointer_aligned_to<T>(pointer: *mut T, align: usize) -> bool {
     debug_assert!(align.is_power_of_two());
 
@@ -580,7 +582,7 @@ fn is_pointer_aligned_to<T>(pointer: *mut T, align: usize) -> bool {
 }
 
 #[inline]
-#[flux::spec(
+#[flux_rs::spec(
     fn(n: usize, divisor: usize) ->
         Option<usize{result: rounded_up(n, divisor, result)}>[
             can_round_up(n, divisor)
@@ -598,7 +600,7 @@ pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
 #[inline]
-#[flux::spec(
+#[flux_rs::spec(
     fn(n: usize, divisor: usize) ->
         usize{result: rounded_up(n, divisor, result)}
     requires divisor > 0 && pow2(divisor) && can_round_up(n, divisor)
@@ -614,7 +616,7 @@ pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
 }
 
 #[inline]
-#[flux::spec(
+#[flux_rs::spec(
     fn(n: usize, divisor: usize) -> usize{result: rounded_down(n, divisor, result)}
     requires divisor > 0 && pow2(divisor)
 )]
@@ -629,8 +631,8 @@ pub(crate) fn round_down_to(n: usize, divisor: usize) -> usize {
 #[inline]
 // TODO: flux leaves integer `!` unrefined and `&` uninterpreted, so it cannot
 // relate `n & !(divisor - 1)` to `divisor`.
-#[flux::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
-#[flux::spec(
+#[flux_rs::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux_rs::spec(
     fn(n: usize, divisor: usize) -> usize{result: rounded_down(n, divisor, result)}
     requires divisor > 0 && pow2(divisor)
 )]
@@ -641,8 +643,8 @@ const fn mask_down(n: usize, divisor: usize) -> usize {
 /// Same as `round_down_to` but preserves pointer provenance.
 #[inline]
 // TODO: same as `mask_down`.
-#[flux::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
-#[flux::spec(
+#[flux_rs::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux_rs::spec(
     fn(ptr: *mut[@p] u8, divisor: usize) -> *mut{q: q.base == p.base
         && rounded_down(p.addr, divisor, q.addr) && q.addr + q.size == p.addr + p.size} u8
     requires divisor > 0 && pow2(divisor)
@@ -654,7 +656,7 @@ pub(crate) fn round_mut_ptr_down_to(ptr: *mut u8, divisor: usize) -> *mut u8 {
 }
 
 #[inline]
-#[flux::spec(
+#[flux_rs::spec(
     fn(ptr: *mut[@p] u8, divisor: usize) -> {
         addr: int. *mut[p.base, addr, p.size - (addr - p.addr)] u8
             | rounded_up(p.addr, divisor, addr)
@@ -716,25 +718,25 @@ const DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER: usize = FIRST_ALLOCATION_GOAL - OVERHEA
 
 /// The memory size and alignment details for a potential new chunk
 /// allocation.
-#[flux::refined_by(payload: int, align: int, size: int)]
-#[flux::invariant(size == payload + <ChunkFooter as Sized>::size_of())]
-#[flux::invariant(align > 0)]
-#[flux::invariant(align % <ChunkFooter as Sized>::align_of() == 0)]
-#[flux::invariant(payload % <ChunkFooter as Sized>::align_of() == 0)]
-#[flux::invariant(payload >= 0)]
+#[flux_rs::refined_by(payload: int, align: int, size: int)]
+#[flux_rs::invariant(size == payload + <ChunkFooter as Sized>::size_of())]
+#[flux_rs::invariant(align > 0)]
+#[flux_rs::invariant(align % <ChunkFooter as Sized>::align_of() == 0)]
+#[flux_rs::invariant(payload % <ChunkFooter as Sized>::align_of() == 0)]
+#[flux_rs::invariant(payload >= 0)]
 #[derive(Debug, Clone, Copy)]
 struct NewChunkMemoryDetails {
-    #[flux::field(usize[payload])]
+    #[flux_rs::field(usize[payload])]
     new_size_without_footer: usize,
-    #[flux::field(usize[align])]
+    #[flux_rs::field(usize[align])]
     align: usize,
-    #[flux::field(usize[size])]
+    #[flux_rs::field(usize[size])]
     size: usize,
 }
 
 /// Wrapper around `Layout::from_size_align` that adds debug assertions.
 #[inline]
-#[flux::spec(fn(size: usize, align: usize)
+#[flux_rs::spec(fn(size: usize, align: usize)
     -> Result<Layout[size, align], AllocErr>[is_valid_layout(size, align)])]
 fn layout_from_size_align(size: usize, align: usize) -> Result<Layout, AllocErr> {
     Layout::from_size_align(size, align).map_err(|_| AllocErr)
@@ -1046,7 +1048,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// Determine the memory details including final size, alignment and final
     /// size without footer for a new chunk that would be allocated to fulfill
     /// an allocation request.
-    #[flux::spec(fn(Option<usize>, Layout) -> Option<NewChunkMemoryDetails>
+    #[flux_rs::spec(fn(Option<usize>, Layout) -> Option<NewChunkMemoryDetails>
         requires MIN_ALIGN > 0 && pow2(MIN_ALIGN) && MIN_ALIGN <= CHUNK_ALIGN)]
     fn new_chunk_memory_details(
         new_size_without_footer: Option<usize>,
@@ -1100,7 +1102,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// If given, `layouts` is a tuple of the current chunk size and the
     /// layout of the allocation request that triggered us to fall back to
     /// allocating a new chunk of memory.
-    #[flux::spec(fn(
+    #[flux_rs::spec(fn(
         NewChunkMemoryDetails,
         Layout,
         NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)},
@@ -2273,7 +2275,7 @@ impl<'a, const MIN_ALIGN: usize> iter::FusedIterator for ChunkIter<'a, MIN_ALIGN
 /// [`iter_allocated_chunks_raw`]: struct.Bump.html#method.iter_allocated_chunks_raw
 #[derive(Debug)]
 pub struct ChunkRawIter<'a, const MIN_ALIGN: usize = 1> {
-    #[flux::field(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)})]
+    #[cfg_attr(flux, flux::field(NonNull<ChunkFooter>{v: footer_ptr(v.base, v.addr, v.size)}))]
     footer: NonNull<ChunkFooter>,
     bump: PhantomData<&'a Bump<MIN_ALIGN>>,
 }
