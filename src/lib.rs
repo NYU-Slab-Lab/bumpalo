@@ -1084,8 +1084,12 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
 
         #[cfg(not(flux))]
         debug_assert_eq!(align % CHUNK_ALIGN, 0);
+        #[cfg(flux)]
+        flux_rs::assert(align % CHUNK_ALIGN == 0);
         #[cfg(not(flux))]
         debug_assert_eq!(new_size_without_footer % CHUNK_ALIGN, 0);
+        #[cfg(flux)]
+        flux_rs::assert(new_size_without_footer % CHUNK_ALIGN == 0);
         let size = new_size_without_footer
             .checked_add(FOOTER_SIZE)
             .unwrap_or_else(allocation_size_overflow);
@@ -1644,7 +1648,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         // which are much more common.
         unsafe {
             let footer_ptr = self.current_chunk_footer.get();
-            let footer = footer_ptr.as_ref();
+            let footer = Self::footer_of(footer_ptr);
 
             let ptr = Self::bump_finger(footer).as_ptr();
             let start = footer.data.as_ptr();
@@ -1653,16 +1657,22 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 start <= ptr,
                 "start pointer {start:#p} should be less than or equal to bump pointer {ptr:#p}"
             );
+            #[cfg(flux)]
+            flux_rs::assert(start <= ptr);
             #[cfg(not(flux))]
             debug_assert!(
                 ptr <= footer_ptr.cast::<u8>().as_ptr(),
                 "bump pointer {ptr:#p} should be less than or equal to footer pointer {footer_ptr:#p}"
             );
+            #[cfg(flux)]
+            flux_rs::assert(ptr <= footer_ptr.cast::<u8>().as_ptr());
             #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(ptr, MIN_ALIGN),
                 "bump pointer {ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
             );
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(ptr, MIN_ALIGN));
             // This `match` should be boiled away by LLVM: `MIN_ALIGN` is a
             // constant and the layout's alignment is also constant in practice
             // after inlining.
@@ -1717,6 +1727,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 "pointer {aligned_ptr:#p} should be aligned to layout alignment of {:#}",
                 layout.align()
             );
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(aligned_ptr, layout.align()));
             #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(aligned_ptr, MIN_ALIGN),
@@ -1728,9 +1740,13 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 start <= aligned_ptr && aligned_ptr <= ptr,
                 "pointer {aligned_ptr:#p} should be in range {start:#p}..{ptr:#p}"
             );
+            #[cfg(flux)]
+            flux_rs::assert(start <= aligned_ptr && aligned_ptr <= ptr);
 
             #[cfg(not(flux))]
             debug_assert!(!aligned_ptr.is_null());
+            #[cfg(flux)]
+            flux_rs::assert(!aligned_ptr.is_null());
             let aligned_ptr = NonNull::new_unchecked(aligned_ptr);
 
             footer.ptr.set(aligned_ptr);
@@ -2072,21 +2088,23 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     }
 
     #[inline]
-    #[flux_rs::trusted(reason = "relies on the caller contract that `ptr` is a live allocation from this Bump with `layout`; flux can't relate `ptr` to the current chunk")]
     unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
         // If the pointer is the last allocation we made, we can reuse the bytes,
         // otherwise they are simply leaked -- at least until somebody calls reset().
-        if self.is_last_allocation(ptr) {
-            let ptr = self.current_chunk_footer.get().as_ref().ptr.get();
-            let ptr = ptr.as_ptr().add(layout.size());
+        let footer = Self::footer_of(self.current_chunk_footer.get());
+        if let Some(finger) = Self::last_allocation(footer, ptr, layout.size()) {
+            let ptr = finger.as_ptr().add(layout.size());
 
             let ptr = round_mut_ptr_up_to_unchecked(ptr, MIN_ALIGN);
+            #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(ptr, MIN_ALIGN),
                 "bump pointer {ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
             );
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(ptr, MIN_ALIGN));
             let ptr = NonNull::new_unchecked(ptr);
-            self.current_chunk_footer.get().as_ref().ptr.set(ptr);
+            footer.ptr.set(ptr);
         }
     }
 
