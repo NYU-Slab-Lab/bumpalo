@@ -1081,8 +1081,10 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 round_up_to(new_size_without_footer + OVERHEAD, TYPICAL_PAGE_SIZE)? - OVERHEAD;
         }
 
-        // debug_assert_eq!(align % CHUNK_ALIGN, 0);
-        // debug_assert_eq!(new_size_without_footer % CHUNK_ALIGN, 0);
+        #[cfg(not(flux))]
+        debug_assert_eq!(align % CHUNK_ALIGN, 0);
+        #[cfg(not(flux))]
+        debug_assert_eq!(new_size_without_footer % CHUNK_ALIGN, 0);
         let size = new_size_without_footer
             .checked_add(FOOTER_SIZE)
             .unwrap_or_else(allocation_size_overflow);
@@ -1645,18 +1647,21 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
 
             let ptr = Self::bump_finger(footer).as_ptr();
             let start = footer.data.as_ptr();
-            // debug_assert!(
-            //     start <= ptr,
-            //     "start pointer {start:#p} should be less than or equal to bump pointer {ptr:#p}"
-            // );
-            // debug_assert!(
-            //     ptr <= footer_ptr.cast::<u8>().as_ptr(),
-            //     "bump pointer {ptr:#p} should be less than or equal to footer pointer {footer_ptr:#p}"
-            // );
-            // debug_assert!(
-            //     is_pointer_aligned_to(ptr, MIN_ALIGN),
-            //     "bump pointer {ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
-            // );
+            #[cfg(not(flux))]
+            debug_assert!(
+                start <= ptr,
+                "start pointer {start:#p} should be less than or equal to bump pointer {ptr:#p}"
+            );
+            #[cfg(not(flux))]
+            debug_assert!(
+                ptr <= footer_ptr.cast::<u8>().as_ptr(),
+                "bump pointer {ptr:#p} should be less than or equal to footer pointer {footer_ptr:#p}"
+            );
+            #[cfg(not(flux))]
+            debug_assert!(
+                is_pointer_aligned_to(ptr, MIN_ALIGN),
+                "bump pointer {ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
+            );
             // This `match` should be boiled away by LLVM: `MIN_ALIGN` is a
             // constant and the layout's alignment is also constant in practice
             // after inlining.
@@ -1705,22 +1710,26 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 }
             };
 
-            // debug_assert!(
-            //     is_pointer_aligned_to(aligned_ptr, layout.align()),
-            //     "pointer {aligned_ptr:#p} should be aligned to layout alignment of {:#}",
-            //     layout.align()
-            // );
-            // debug_assert!(
-            //     is_pointer_aligned_to(aligned_ptr, MIN_ALIGN),
-            //     "pointer {aligned_ptr:#p} should be aligned to minimum alignment of {:#}",
-            //     MIN_ALIGN
-            // );
-            // debug_assert!(
-            //     start <= aligned_ptr && aligned_ptr <= ptr,
-            //     "pointer {aligned_ptr:#p} should be in range {start:#p}..{ptr:#p}"
-            // );
+            #[cfg(not(flux))]
+            debug_assert!(
+                is_pointer_aligned_to(aligned_ptr, layout.align()),
+                "pointer {aligned_ptr:#p} should be aligned to layout alignment of {:#}",
+                layout.align()
+            );
+            #[cfg(not(flux))]
+            debug_assert!(
+                is_pointer_aligned_to(aligned_ptr, MIN_ALIGN),
+                "pointer {aligned_ptr:#p} should be aligned to minimum alignment of {:#}",
+                MIN_ALIGN
+            );
+            #[cfg(not(flux))]
+            debug_assert!(
+                start <= aligned_ptr && aligned_ptr <= ptr,
+                "pointer {aligned_ptr:#p} should be in range {start:#p}..{ptr:#p}"
+            );
 
-            // debug_assert!(!aligned_ptr.is_null());
+            #[cfg(not(flux))]
+            debug_assert!(!aligned_ptr.is_null());
             let aligned_ptr = NonNull::new_unchecked(aligned_ptr);
 
             footer.ptr.set(aligned_ptr);
