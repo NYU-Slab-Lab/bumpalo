@@ -140,6 +140,7 @@ struct RewindGuard<'a, const MIN_ALIGN: usize> {
     ptr: NonNull<u8>,
 
     /// The checkpoint to rewind to on drop.
+    #[flux_rs::field({cb: int, ca: int, cs: int, cm: int. RawCheckpoint[cb, ca, cs, cm, |x| x % MIN_ALIGN == 0] | true})]
     checkpoint: RawCheckpoint,
 
     /// Whether the guard is active, and should rewind on drop.
@@ -156,7 +157,8 @@ impl<'a, const MIN_ALIGN: usize> RewindGuard<'a, MIN_ALIGN> {
     ///
     /// Ownership of `ptr` is moved into this guard, and it must not be used
     /// again except through this guard.
-    #[flux_rs::spec(fn(&Bump<MIN_ALIGN>, NonNull<u8>[@b, @a, @s, @m], RawCheckpoint) -> Self[b, a, s, m])]
+    #[flux_rs::spec(fn(&Bump<MIN_ALIGN>, NonNull<u8>[@b, @a, @s, @m],
+        RawCheckpoint[@_cb, @_ca, @_cs, @_cm, |x| x % MIN_ALIGN == 0]) -> Self[b, a, s, m])]
     unsafe fn new(bump: &'a Bump<MIN_ALIGN>, ptr: NonNull<u8>, checkpoint: RawCheckpoint) -> Self {
         Self {
             bump,
@@ -411,7 +413,9 @@ pub struct Bump<const MIN_ALIGN: usize = 1> {
 #[repr(C)]
 #[repr(align(16))]
 #[derive(Debug)]
-#[flux_rs::refined_by(base: int, addr: int, size: int, align: int, meta: int)]
+// `fa` is a ghost predicate on the addresses the bump finger may take: alignment to the `MIN_ALIGN` of
+// the `Bump` that owns this chunk.
+#[flux_rs::refined_by(base: int, addr: int, size: int, align: int, meta: int, hrn fa: int -> bool)]
 #[flux_rs::invariant(size > 0)]
 #[flux_rs::invariant(addr == base)]
 #[flux_rs::invariant(addr % align == 0)]
@@ -434,7 +438,8 @@ struct ChunkFooter {
     prev: Cell<NonNull<ChunkFooter>>,
 
     // Bump allocation finger that is always in the range `self.data..=self`.
-    #[flux_rs::field(Cell<NonNull<u8>{v: bump_finger(base, addr, size, v.base, v.addr, v.size)}>)]
+    #[flux_rs::field(Cell<NonNull<u8>{v: bump_finger(base, addr, size, v.base, v.addr, v.size)
+        && fa(v.addr)}>)]
     ptr: Cell<NonNull<u8>>,
 
     // The bytes allocated in all chunks so far, the canonical empty chunk has
@@ -488,7 +493,7 @@ impl EmptyChunkFooter {
 impl ChunkFooter {
     // Returns the start and length of the currently allocated region of this
     // chunk.
-    #[flux_rs::spec(fn(&ChunkFooter[@base, @addr, @size, @_align, @_meta]) -> {start: int.
+    #[flux_rs::spec(fn(&ChunkFooter[@base, @addr, @size, @_align, @_meta, @_fa]) -> {start: int.
         (*const[base, start, addr + size - start] u8,
          usize[addr + size - <ChunkFooter as Sized>::size_of() - start])
         | addr <= start && start <= addr + size - <ChunkFooter as Sized>::size_of()})]
@@ -513,7 +518,8 @@ impl ChunkFooter {
 ///
 /// This can be used to perform a partial reset of a `Bump`
 #[derive(Debug, Clone, Copy)]
-#[flux_rs::refined_by(cb: int, ca: int, cs: int, cm: int)]
+// `cfa` is the chunk's ghost predicate on bump finger addresses (see `ChunkFooter`).
+#[flux_rs::refined_by(cb: int, ca: int, cs: int, cm: int, hrn cfa: int -> bool)]
 pub struct RawCheckpoint {
     #[flux_rs::field({NonNull<ChunkFooter>[cb, ca, cs, cm] | footer_ptr(cb, ca, cs)})]
     chunk: NonNull<ChunkFooter>,
@@ -521,7 +527,7 @@ pub struct RawCheckpoint {
     // allocation, between its data (which starts at the allocation's base)
     // and its footer.
     #[flux_rs::field(NonNull<u8>{v: v.base == cb && cb <= v.addr && v.addr <= ca
-        && v.addr + v.size == ca + <ChunkFooter as Sized>::size_of()})]
+        && v.addr + v.size == ca + <ChunkFooter as Sized>::size_of() && cfa(v.addr)})]
     ptr: NonNull<u8>,
 }
 
@@ -570,6 +576,13 @@ unsafe fn dealloc_chunks_until_stop(
 // it, the returned references to allocations borrow the `Bump` and therefore
 // prevent sending the `Bump` across threads until the borrows end.
 unsafe impl<const MIN_ALIGN: usize> Send for Bump<MIN_ALIGN> {}
+
+/// Lemma: a multiple of a power of two `big` is a multiple of any smaller power of two
+/// `small <= 16` (such as `MIN_ALIGN`).
+#[cfg(flux)]
+#[flux_rs::spec(fn(x: usize, big: usize, small: usize) -> {() | x % small == 0}
+    requires x % big == 0 && pow2(big) && pow2(small) && small <= big && small <= 16)]
+fn align_weaken(_x: usize, _big: usize, _small: usize) {}
 
 #[inline]
 #[flux_rs::spec(fn(*mut[@p] T, align: usize) -> bool[p.addr % align == 0] requires align > 0 && pow2(align))]
@@ -1142,7 +1155,10 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         // even after this rounding we have enough non-zero capacity in the
         // chunk.
         let ptr = round_mut_ptr_down_to(footer_ptr.cast::<u8>(), MIN_ALIGN);
+        #[cfg(not(flux))]
         debug_assert_eq!(ptr as usize % MIN_ALIGN, 0);
+        #[cfg(flux)]
+        flux_rs::assert(is_pointer_aligned_to(ptr, MIN_ALIGN));
         debug_assert!(
             data.as_ptr() <= ptr,
             "bump pointer {ptr:#p} should still be greater than or equal to the \
@@ -1219,11 +1235,14 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             dealloc_chunk_list(prev_chunk);
 
             // Reset the bump finger to the end of the chunk.
+            #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(cur_chunk.as_ptr(), MIN_ALIGN),
                 "bump pointer {cur_chunk:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
             );
-            let footer = cur_chunk.as_ref();
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(cur_chunk.as_ptr(), MIN_ALIGN));
+            let footer = Self::footer_of(cur_chunk);
             footer.ptr.set(footer.data.add(footer.layout.size() - FOOTER_SIZE));
 
             // Reset the allocated size of the chunk.
@@ -1250,6 +1269,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// Get a raw checkpoint that snapshots the current state of this `Bump`.
     ///
     /// See [`Bump::reset_to_raw_checkpoint`] for details.
+    #[flux_rs::spec(fn(&Self) -> {cb: int, ca: int, cs: int, cm: int.
+        RawCheckpoint[cb, ca, cs, cm, |x| x % MIN_ALIGN == 0] | true})]
     pub fn raw_checkpoint(&self) -> RawCheckpoint {
         let chunk = self.current_chunk_footer.get();
         let chunk_ref = unsafe { Self::footer_of(chunk) };
@@ -1337,34 +1358,47 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     /// //
     /// //     assert_eq!(*a, 'a');
     /// ```
+    #[flux_rs::spec(fn(&Self, RawCheckpoint[@_cb, @_ca, @_cs, @_cm, |x| x % MIN_ALIGN == 0]))]
     pub unsafe fn reset_to_raw_checkpoint(&self, checkpoint: RawCheckpoint) {
         let mut cur_chunk = self.current_chunk_footer.get();
 
         if Self::same_chunk(checkpoint.chunk, cur_chunk) {
+            #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(checkpoint.ptr.as_ptr(), MIN_ALIGN),
                 "checkpoint ptr is not aligned to bump's alignment"
             );
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(checkpoint.ptr.as_ptr(), MIN_ALIGN));
 
             // Checkpoint pointer must be aligned and within the current chunk
             // bounds.
+            #[cfg(not(flux))]
             debug_assert!(
                 checkpoint.ptr.as_ptr() >= cur_chunk.as_ref().data.as_ptr(),
                 "checkpoint pointer {:#p} should be greater than or equal to chunk pointer {:#p}",
                 checkpoint.ptr.as_ptr(),
                 cur_chunk.as_ref().data.as_ptr()
             );
+            #[cfg(flux)]
+            flux_rs::assert(checkpoint.ptr.as_ptr() >= Self::footer_of(cur_chunk).data.as_ptr());
+            #[cfg(not(flux))]
             debug_assert!(
                 checkpoint.ptr.as_ptr() <= cur_chunk.cast::<u8>().as_ptr(),
                 "checkpoint pointer {:#p} should be less than or equal to footer pointer {:#p}",
                 checkpoint.ptr.as_ptr(),
                 self.current_chunk_footer.get().cast::<u8>().as_ptr()
             );
+            #[cfg(flux)]
+            flux_rs::assert(checkpoint.ptr.as_ptr() <= cur_chunk.cast::<u8>().as_ptr());
+            #[cfg(not(flux))]
             debug_assert!(
                 is_pointer_aligned_to(checkpoint.ptr.as_ptr(), MIN_ALIGN),
                 "checkpoint pointer {:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}",
                 checkpoint.ptr.as_ptr()
             );
+            #[cfg(flux)]
+            flux_rs::assert(is_pointer_aligned_to(checkpoint.ptr.as_ptr(), MIN_ALIGN));
 
             // Re-alloc edge case means that the current pointer may be greater
             // than that of the checkpoint, so reset to whichever one is
@@ -1381,7 +1415,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             dealloc_chunks_until_stop(prev_chunk, checkpoint.chunk);
 
             // Reset the current chunk to the start.
-            let footer = cur_chunk.as_ref();
+            let footer = Self::footer_of(cur_chunk);
             footer.ptr.set(footer.data.add(footer.layout.size() - FOOTER_SIZE));
 
             // Recalculate allocated bytes for the current chunk in case there
@@ -1631,9 +1665,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
 
     // Reads the bump finger of a chunk owned by this `Bump`.
     #[inline(always)]
-    #[flux_rs::trusted(reason = "every chunk owned by a `Bump<MIN_ALIGN>` keeps its bump finger `MIN_ALIGN`-aligned; flux can't state this as a `ChunkFooter` invariant since `MIN_ALIGN` is a parameter of `Bump`")]
-    #[flux_rs::spec(fn(&ChunkFooter[@b, @a, @s, @_al, @_m]) -> NonNull<u8>{v:
-        bump_finger(b, a, s, v.base, v.addr, v.size) && v.addr % MIN_ALIGN == 0})]
+    #[flux_rs::spec(fn(&ChunkFooter[@b, @a, @s, @_al, @_m, @fa]) -> NonNull<u8>{v:
+        bump_finger(b, a, s, v.base, v.addr, v.size) && fa(v.addr)})]
     fn bump_finger(footer: &ChunkFooter) -> NonNull<u8> {
         footer.ptr.get()
     }
@@ -2018,8 +2051,8 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // current chunk), returns that finger.
     #[inline]
     #[flux_rs::trusted(reason = "caller contract: `ptr` is a live allocation of `size` bytes from this Bump, so if it is the current chunk's bump finger, those bytes lie between the finger and the footer")]
-    #[flux_rs::spec(fn(&ChunkFooter[@fb, @fa, @fs, @_al, @_m], NonNull<u8>[@b, @a, @_s, @_pm], size: usize)
-        -> Option<NonNull<u8>{f: bump_finger(fb, fa, fs, f.base, f.addr, f.size)
+    #[flux_rs::spec(fn(&ChunkFooter[@fb, @fa, @fs, @_al, @_m, @ffa], NonNull<u8>[@b, @a, @_s, @_pm], size: usize)
+        -> Option<NonNull<u8>{f: bump_finger(fb, fa, fs, f.base, f.addr, f.size) && ffa(f.addr)
             && f.base == b && f.addr == a && f.size >= size + <ChunkFooter as Sized>::size_of()}>)]
     fn last_allocation(footer: &ChunkFooter, ptr: NonNull<u8>, _size: usize) -> Option<NonNull<u8>> {
         let finger = footer.ptr.get();
@@ -2034,9 +2067,10 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // is the last `FOOTER_SIZE` bytes of its chunk, whose data starts at the
     // allocation's base.
     #[inline]
-    #[flux_rs::trusted(reason = "every footer sits at the end of its own chunk: `new_chunk` places it at `data + size - FOOTER_SIZE`, and `EMPTY_CHUNK`'s data is the footer itself")]
-    #[flux_rs::spec(fn(NonNull<ChunkFooter>[@pb, @pa, @ps, @_pm]) -> &ChunkFooter{f:
-            f.base == pb && pa + <ChunkFooter as Sized>::size_of() == f.addr + f.size}
+    #[flux_rs::trusted(reason = "every footer sits at the end of its own chunk: `new_chunk` places it at `data + size - FOOTER_SIZE`, and `EMPTY_CHUNK`'s data is the footer itself; and every chunk reachable from a `Bump<MIN_ALIGN>` belongs to it, so its finger is `MIN_ALIGN`-aligned")]
+    #[flux_rs::spec(fn(NonNull<ChunkFooter>[@pb, @pa, @ps, @_pm]) -> {s: int, al: int, m: int.
+            &ChunkFooter[pb, pb, s, al, m, |x| x % MIN_ALIGN == 0]
+            | pa + <ChunkFooter as Sized>::size_of() == pb + s}
         requires footer_ptr(pb, pa, ps))]
     unsafe fn footer_of<'a>(footer: NonNull<ChunkFooter>) -> &'a ChunkFooter {
         footer.as_ref()
@@ -2152,9 +2186,10 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
         // This is how much space we would *actually* reclaim while satisfying
         // the requested alignment.
         let delta = round_down_to(old_size - new_size, new_layout.align().max(MIN_ALIGN));
+        #[cfg(flux)]
+        align_weaken(delta, new_layout.align().max(MIN_ALIGN), MIN_ALIGN);
 
-        let footer = self.current_chunk_footer.get();
-        let footer = footer.as_ref();
+        let footer = Self::footer_of(self.current_chunk_footer.get());
         if let Some(finger) = Self::last_allocation(footer, ptr, old_size) {
             // Only reclaim the excess space (which requires a copy) if it
             // is worth it: we are actually going to recover "enough" space
@@ -2188,10 +2223,13 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
                 // NB: new_ptr is aligned, because ptr *has to* be aligned, and we
                 // made sure delta is aligned.
                 let new_ptr = NonNull::new_unchecked(finger.as_ptr().add(delta));
+                #[cfg(not(flux))]
                 debug_assert!(
                     is_pointer_aligned_to(new_ptr.as_ptr(), MIN_ALIGN),
                     "bump pointer {new_ptr:#p} should be aligned to the minimum alignment of {MIN_ALIGN:#x}"
                 );
+                #[cfg(flux)]
+                flux_rs::assert(is_pointer_aligned_to(new_ptr.as_ptr(), MIN_ALIGN));
                 footer.ptr.set(new_ptr);
 
                 // NB: we know it is non-overlapping because of the size check
