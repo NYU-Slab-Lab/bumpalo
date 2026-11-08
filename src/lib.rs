@@ -1782,6 +1782,10 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
             flux_rs::assert(!aligned_ptr.is_null());
             let aligned_ptr = NonNull::new_unchecked(aligned_ptr);
 
+            // Never write to the shared `EMPTY_CHUNK` (see `EmptyChunkFooter`'s `Sync` impl),
+            // the only chunk with no capacity.
+            #[cfg(flux)]
+            flux_rs::assert(footer.layout.size() - FOOTER_SIZE > 0);
             footer.ptr.set(aligned_ptr);
             Some(aligned_ptr)
         }
