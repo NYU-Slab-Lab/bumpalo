@@ -55,8 +55,12 @@ use crate::alloc::UnstableLayoutMethods;
 /// field. This allows zero-sized types to not be special-cased by consumers of
 /// this type.
 #[allow(missing_debug_implementations)]
+#[cfg_attr(flux, flux_rs::refined_by(cap: int))]
+#[cfg_attr(flux, flux_rs::invariant(cap >= 0))]
 pub struct RawVec<'a, T> {
+    #[cfg_attr(flux, flux::field(NonNull<T>{p: p.addr == p.base && p.size == cap * T::size_of() && p.addr % T::align_of() == 0}))]
     ptr: NonNull<T>,
+    #[cfg_attr(flux, flux::field(usize[cap]))]
     cap: usize,
     a: &'a Bump,
 }
@@ -139,6 +143,7 @@ impl<'a, T> RawVec<'a, T> {
     /// Gets a raw pointer to the start of the allocation. Note that this is
     /// Unique::empty() if `cap = 0` or T is zero-sized. In the former case, you must
     /// be careful.
+    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> *mut{p: p.addr == p.base && p.size == c * T::size_of() && p.addr % T::align_of() == 0} T))]
     pub fn ptr(&self) -> *mut T {
         self.ptr.as_ptr()
     }
@@ -147,9 +152,10 @@ impl<'a, T> RawVec<'a, T> {
     ///
     /// This will always be `usize::MAX` if `T` is zero-sized.
     #[inline(always)]
+    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> usize[if T::size_of() == 0 { usize::MAX } else { c }]))]
     pub fn cap(&self) -> usize {
         if mem::size_of::<T>() == 0 {
-            !0
+            usize::MAX
         } else {
             self.cap
         }
@@ -431,6 +437,9 @@ impl<'a, T> RawVec<'a, T> {
     /// # }
     /// ```
     #[inline(always)]
+    #[cfg_attr(flux, flux_rs::trusted(reason = "amortized growth + allocator realloc not yet verified"))]
+    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg RawVec<T>[@c], used_cap: usize, needed_extra_cap: usize)
+        ensures self: RawVec<T>{c2: c2 >= used_cap + needed_extra_cap}))]
     pub fn reserve(&mut self, used_cap: usize, needed_extra_cap: usize) {
         self.infallible_reserve_internal(used_cap, needed_extra_cap, Amortized)
     }
