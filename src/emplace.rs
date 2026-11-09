@@ -267,6 +267,7 @@ where
     /// drop(place);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(self: &mut Self[@_b, @_a, @_s, @l, @c, @_m]) -> &mut [MaybeUninit<T>][c])]
     pub fn as_uninit_mut(&mut self) -> &mut [MaybeUninit<T>] {
         unsafe {
             slice::from_raw_parts_mut(self.base_ptr().cast::<MaybeUninit<T>>(), self.capacity)
@@ -401,6 +402,7 @@ where
     /// assert_eq!(place.as_slice(), &[99, 20]);
     /// ```
     #[inline]
+    #[flux_rs::spec(fn(self: &mut Self[@_b, @_a, @_s, @l, @c, @_m]) -> &mut [T][l])]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.base_ptr(), self.len) }
     }

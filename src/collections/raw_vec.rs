@@ -13,6 +13,20 @@
 
 use crate::Bump;
 
+flux_rs::defs! {
+    use crate::allocated;
+
+    // What `RawVec::cap` returns: ZSTs never allocate and report `usize::MAX`.
+    fn logical_cap(cap: int, elem_size: int) -> int {
+        if elem_size == 0 { usize::MAX } else { cap }
+    }
+
+    // A buffer pointer for `n` bytes: always non-null and aligned (empty buffers are dangling).
+    fn buf_ptr(base: int, addr: int, size: int, n: int, align: int) -> bool {
+        addr > 0 && addr % align == 0 && (n == 0 || allocated(base, addr, size, n, align))
+    }
+}
+
 use core::cmp;
 use core::mem;
 use core::ptr::{self, NonNull};
@@ -58,7 +72,7 @@ use crate::alloc::UnstableLayoutMethods;
 #[cfg_attr(flux, flux_rs::refined_by(cap: int))]
 #[cfg_attr(flux, flux_rs::invariant(cap >= 0))]
 pub struct RawVec<'a, T> {
-    #[cfg_attr(flux, flux::field(NonNull<T>{p: p.addr == p.base && p.size == cap * T::size_of() && p.addr % T::align_of() == 0}))]
+    #[cfg_attr(flux, flux::field(NonNull<T>{p: buf_ptr(p.base, p.addr, p.size, cap * T::size_of(), T::align_of())}))]
     ptr: NonNull<T>,
     #[cfg_attr(flux, flux::field(usize[cap]))]
     cap: usize,
@@ -68,6 +82,7 @@ pub struct RawVec<'a, T> {
 impl<'a, T> RawVec<'a, T> {
     /// Like `new` but parameterized over the choice of allocator for
     /// the returned RawVec.
+    #[cfg_attr(flux, flux_rs::spec(fn(&Bump) -> RawVec<T>[0]))]
     pub fn new_in(a: &'a Bump) -> Self {
         // `cap: 0` means "unallocated". zero-sized types are ignored.
         RawVec {
@@ -80,6 +95,7 @@ impl<'a, T> RawVec<'a, T> {
     /// Like `with_capacity` but parameterized over the choice of
     /// allocator for the returned RawVec.
     #[inline]
+    #[cfg_attr(flux, flux_rs::spec(fn(cap: usize, &Bump) -> RawVec<T>[cap]))]
     pub fn with_capacity_in(cap: usize, a: &'a Bump) -> Self {
         RawVec::allocate_in(cap, false, a)
     }
@@ -91,6 +107,7 @@ impl<'a, T> RawVec<'a, T> {
         RawVec::allocate_in(cap, true, a)
     }
 
+    #[cfg_attr(flux, flux_rs::spec(fn(cap: usize, bool, &Bump) -> RawVec<T>[cap]))]
     fn allocate_in(cap: usize, zeroed: bool, mut a: &'a Bump) -> Self {
         unsafe {
             let elem_size = mem::size_of::<T>();
@@ -143,7 +160,7 @@ impl<'a, T> RawVec<'a, T> {
     /// Gets a raw pointer to the start of the allocation. Note that this is
     /// Unique::empty() if `cap = 0` or T is zero-sized. In the former case, you must
     /// be careful.
-    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> *mut{p: p.addr == p.base && p.size == c * T::size_of() && p.addr % T::align_of() == 0} T))]
+    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> *mut{p: buf_ptr(p.base, p.addr, p.size, c * T::size_of(), T::align_of())} T))]
     pub fn ptr(&self) -> *mut T {
         self.ptr.as_ptr()
     }
@@ -152,7 +169,7 @@ impl<'a, T> RawVec<'a, T> {
     ///
     /// This will always be `usize::MAX` if `T` is zero-sized.
     #[inline(always)]
-    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> usize[if T::size_of() == 0 { usize::MAX } else { c }]))]
+    #[cfg_attr(flux, flux_rs::spec(fn(&RawVec<T>[@c]) -> usize[logical_cap(c, T::size_of())]))]
     pub fn cap(&self) -> usize {
         if mem::size_of::<T>() == 0 {
             usize::MAX
@@ -439,7 +456,8 @@ impl<'a, T> RawVec<'a, T> {
     #[inline(always)]
     #[cfg_attr(flux, flux_rs::trusted(reason = "amortized growth + allocator realloc not yet verified"))]
     #[cfg_attr(flux, flux_rs::spec(fn(self: &strg RawVec<T>[@c], used_cap: usize, needed_extra_cap: usize)
-        ensures self: RawVec<T>{c2: c2 >= used_cap + needed_extra_cap}))]
+        requires used_cap <= logical_cap(c, T::size_of())
+        ensures self: RawVec<T>{c2: used_cap + needed_extra_cap <= logical_cap(c2, T::size_of())}))]
     pub fn reserve(&mut self, used_cap: usize, needed_extra_cap: usize) {
         self.infallible_reserve_internal(used_cap, needed_extra_cap, Amortized)
     }

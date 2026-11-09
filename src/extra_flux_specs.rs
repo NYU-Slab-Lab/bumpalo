@@ -104,6 +104,17 @@ unsafe fn alloc(layout: Layout) -> *mut u8;
 )]
 unsafe fn dealloc(ptr: *mut u8, layout: Layout);
 
+// flux-core has no spec for building slices from raw parts.
+#[extern_spec(core::slice)]
+#[spec(fn(data: *const[@p] T, len: usize) -> &[T][len]
+    requires p.addr != 0 && aligned_to(p, T::align_of()) && valid(p, len * T::size_of()))]
+unsafe fn from_raw_parts<'a, T>(data: *const T, len: usize) -> &'a [T];
+
+#[extern_spec(core::slice)]
+#[spec(fn(data: *mut[@p] T, len: usize) -> &mut [T][len]
+    requires p.addr != 0 && aligned_to(p, T::align_of()) && valid(p, len * T::size_of()))]
+unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T];
+
 // Same as flux-core's `NonNull::from_ref`/`from_mut`, for the `From` impls.
 #[extern_spec(core::ptr)]
 impl<'a, T: 'a> From<&'a T> for core::ptr::NonNull<T> {
