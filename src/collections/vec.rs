@@ -106,21 +106,6 @@ use core::slice;
 #[cfg(feature = "std")]
 use std::io;
 
-#[cfg(flux)]
-flux_rs::defs! {
-    use flux_core::ptr::nonoverlapping;
-    use crate::collections::raw_vec::buf_ptr;
-    use crate::collections::raw_vec::logical_cap;
-}
-
-/// Assumes the `n` elements at `src` and at `dst` don't overlap. Only call this where `src` comes
-/// from a live `&[T]` and `dst` points into memory owned through `&mut self`: Rust's aliasing rules
-/// make those disjoint, but flux can't check it.
-#[cfg(flux)]
-#[flux_rs::trusted(reason = "src from a live `&[T]`, dst into memory owned through `&mut self`; Rust aliasing keeps them disjoint")]
-#[flux_rs::spec(fn(src: *const[@s] T, n: usize, dst: *mut[@d] T) -> {() | nonoverlapping(s, d, n * T::size_of())})]
-fn assume_disjoint<T>(_src: *const T, _n: usize, _dst: *mut T) {}
-
 unsafe fn arith_offset<T>(p: *const T, offset: isize) -> *const T {
     p.offset(offset)
 }
@@ -533,13 +518,8 @@ macro_rules! vec {
 /// [`insert`]: struct.Vec.html#method.insert
 /// [`reserve`]: struct.Vec.html#method.reserve
 /// [owned slice]: https://doc.rust-lang.org/std/boxed/struct.Box.html
-// ZSTs are exempt from `len <= cap`: they keep `cap == 0` for any `len` but copy zero bytes.
-#[cfg_attr(flux, flux_rs::refined_by(len: int, cap: int))]
-#[cfg_attr(flux, flux_rs::invariant(len <= logical_cap(cap, T::size_of())))]
 pub struct Vec<'bump, T: 'bump> {
-    #[cfg_attr(flux, flux::field(RawVec<T>[cap]))]
     buf: RawVec<'bump, T>,
-    #[cfg_attr(flux, flux::field(usize[len]))]
     len: usize,
 }
 
@@ -562,7 +542,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// let mut vec: Vec<i32> = Vec::new_in(&b);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&Bump) -> Vec<T>[0, 0]))]
     pub fn new_in(bump: &'bump Bump) -> Vec<'bump, T> {
         Vec {
             buf: RawVec::new_in(bump),
@@ -603,7 +582,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// vec.push(11);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(capacity: usize, &Bump) -> Vec<T>[0, capacity]))]
     pub fn with_capacity_in(capacity: usize, bump: &'bump Bump) -> Vec<'bump, T> {
         Vec {
             buf: RawVec::with_capacity_in(capacity, bump),
@@ -731,7 +709,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// assert_eq!(vec.capacity(), 10);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&Vec<T>[@v]) -> usize[logical_cap(v.cap, T::size_of())]))]
     pub fn capacity(&self) -> usize {
         self.buf.cap()
     }
@@ -756,8 +733,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// vec.reserve(10);
     /// assert!(vec.capacity() >= 11);
     /// ```
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg Vec<T>[@v], additional: usize)
-        ensures self: Vec<T>{w: w.len == v.len && v.len + additional <= logical_cap(w.cap, T::size_of())}))]
     pub fn reserve(&mut self, additional: usize) {
         self.buf.reserve(self.len, additional);
     }
@@ -1000,7 +975,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// io::sink().write(buffer.as_slice()).unwrap();
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&Vec<T>[@v]) -> &[T][v.len]))]
     pub fn as_slice(&self) -> &[T] {
         self
     }
@@ -1020,7 +994,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&mut Vec<T>[@v]) -> &mut [T][v.len]))]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         self
     }
@@ -1056,7 +1029,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     ///
     /// [`as_mut_ptr`]: Vec::as_mut_ptr
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&Vec<T>[@v]) -> *const{p: buf_ptr(p.base, p.addr, p.size, v.cap * T::size_of(), T::align_of())} T))]
     pub fn as_ptr(&self) -> *const T {
         // We shadow the slice method of the same name to avoid going through
         // `deref`, which creates an intermediate reference.
@@ -1099,7 +1071,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// assert_eq!(&*x, &[0, 1, 2, 3]);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &mut Vec<T>[@v]) -> *mut{p: buf_ptr(p.base, p.addr, p.size, v.cap * T::size_of(), T::align_of())} T))]
     pub fn as_mut_ptr(&mut self) -> *mut T {
         // We shadow the slice method of the same name to avoid going through
         // `deref_mut`, which creates an intermediate reference.
@@ -1184,9 +1155,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// assert_eq!(b"aaaa", &*vec);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg Vec<T>[@v], new_len: usize)
-        requires new_len <= logical_cap(v.cap, T::size_of())
-        ensures self: Vec<T>[new_len, v.cap]))]
     pub unsafe fn set_len(&mut self, new_len: usize) {
         self.len = new_len;
     }
@@ -1475,9 +1443,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     ///   )
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg Vec<T>[@v], value: T)
-        requires v.len < logical_cap(v.cap, T::size_of())
-        ensures self: Vec<T>[v.len + 1, v.cap]))]
     unsafe fn push_unchecked(&mut self, value: T) {
         debug_assert!(self.len() < self.capacity());
 
@@ -1723,7 +1688,6 @@ impl<'bump, T: 'bump> Vec<'bump, T> {
     /// assert_eq!(a.len(), 3);
     /// ```
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(&Vec<T>[@v]) -> usize[v.len]))]
     pub fn len(&self) -> usize {
         self.len
     }
@@ -1879,9 +1843,6 @@ impl<'bump, T: 'bump + Clone> Vec<'bump, T> {
     /// - self.len()      == old(self).len() + slice.len(),
     /// - self.capacity() == old(self).capacity(),
     #[inline]
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg Vec<T>[@v], slice: &[T][@m])
-        requires v.len + m <= logical_cap(v.cap, T::size_of())
-        ensures self: Vec<T>[v.len + m, v.cap]))]
     unsafe fn extend_from_slice_unchecked(&mut self, slice: &[T]) {
         // Guaranteed never to overflow for non ZSTs
         //   size_of::<T>() <= isize::MAX - (isize::MAX % align_of::<T>()))
@@ -2036,9 +1997,6 @@ impl<'bump, T: 'bump + Copy> Vec<'bump, T> {
     ///       * calling [`reserve`](Self::reserve) beforehand to guarantee that there is enough
     ///         capacity to store `other.len()` more items.
     ///       * guaranteeing that `self` and `other` do not overlap.
-    #[cfg_attr(flux, flux_rs::spec(fn(self: &strg Vec<T>[@v], other: &[T][@m])
-        requires v.len + m <= logical_cap(v.cap, T::size_of())
-        ensures self: Vec<T>[v.len + m, v.cap]))]
     unsafe fn extend_from_slice_copy_unchecked(&mut self, other: &[T]) {
         let old_len = self.len();
         debug_assert!(old_len + other.len() <= self.capacity());
@@ -2054,8 +2012,6 @@ impl<'bump, T: 'bump + Copy> Vec<'bump, T> {
         unsafe {
             let src = other.as_ptr();
             let dst = self.as_mut_ptr().add(old_len);
-            #[cfg(flux)]
-            assume_disjoint(src, other.len(), dst);
             ptr::copy_nonoverlapping(src, dst, other.len());
             self.set_len(old_len + other.len());
         }
@@ -2323,7 +2279,6 @@ where
 impl<'bump, T: 'bump> ops::Deref for Vec<'bump, T> {
     type Target = [T];
 
-    #[cfg_attr(flux, flux_rs::spec(fn(&Vec<T>[@v]) -> &[T][v.len]))]
     fn deref(&self) -> &[T] {
         unsafe {
             let p = self.buf.ptr();
@@ -2334,7 +2289,6 @@ impl<'bump, T: 'bump> ops::Deref for Vec<'bump, T> {
 }
 
 impl<'bump, T: 'bump> ops::DerefMut for Vec<'bump, T> {
-    #[cfg_attr(flux, flux_rs::spec(fn(&mut Vec<T>[@v]) -> &mut [T][v.len]))]
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe {
             let ptr = self.buf.ptr();

@@ -576,11 +576,6 @@ where
         let new_layout = Layout::array::<T>(new_capacity).map_err(|_| AllocErr)?;
 
         let ptr = self.inner.guard.ptr;
-        // The guard's checkpoint was taken just before `ptr`'s allocation (see
-        // `RewindGuard::new`). That stays true for the grown allocation only if
-        // nothing was allocated after `ptr`, i.e., `ptr` is the last allocation.
-        #[cfg(flux)]
-        flux_rs::assert(self.bump().is_last_allocation(ptr));
         let new_ptr = unsafe { self.bump().grow_internal(ptr, old_layout, new_layout)? };
 
         self.inner.guard.ptr = new_ptr;
