@@ -459,7 +459,7 @@ struct EmptyChunkFooter(ChunkFooter);
 
 unsafe impl Sync for EmptyChunkFooter {}
 
-#[flux_rs::trusted(reason = "`data` and `ptr` are both this static's own address, which flux can't tell from two separate casts of `&EMPTY_CHUNK`")]
+#[flux_rs::trusted(reason = "ABORT: `data` and `ptr` are both this static's own address, which flux can't tell from two separate casts of `&EMPTY_CHUNK`")]
 #[flux_rs::spec(EmptyChunkFooter)]
 static EMPTY_CHUNK: EmptyChunkFooter = EmptyChunkFooter(ChunkFooter {
     // This chunk is empty (except the foot itself).
@@ -644,7 +644,7 @@ pub(crate) fn round_down_to(n: usize, divisor: usize) -> usize {
 #[inline]
 // TODO: flux leaves integer `!` unrefined and `&` uninterpreted, so it cannot
 // relate `n & !(divisor - 1)` to `divisor`.
-#[flux_rs::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux_rs::trusted(reason = "ABORT: bit masking; spec checked separately with z3 over 64-bit bitvectors")]
 #[flux_rs::spec(
     fn(n: usize, divisor: usize) -> usize{result: rounded_down(n, divisor, result)}
     requires divisor > 0 && pow2(divisor)
@@ -656,7 +656,7 @@ const fn mask_down(n: usize, divisor: usize) -> usize {
 /// Same as `round_down_to` but preserves pointer provenance.
 #[inline]
 // TODO: same as `mask_down`.
-#[flux_rs::trusted(reason = "bit masking; spec checked separately with z3 over 64-bit bitvectors")]
+#[flux_rs::trusted(reason = "ABORT: bit masking; spec checked separately with z3 over 64-bit bitvectors")]
 #[flux_rs::spec(
     fn(ptr: *mut[@p] u8, divisor: usize) -> *mut{q: q.base == p.base
         && rounded_down(p.addr, divisor, q.addr) && q.addr + q.size == p.addr + p.size} u8
@@ -1674,6 +1674,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     #[inline(always)]
     #[flux_rs::spec(fn(&Self, Layout[@size, @align])
         -> Option<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)}>)]
+    #[flux_rs::trusted(reason = "ABORT: flux cannot prove `footer.layout.size() - FOOTER_SIZE > 0` (never writing to EMPTY_CHUNK)")]
     fn try_alloc_layout_fast(&self, layout: Layout) -> Option<NonNull<u8>> {
         // We don't need to check for ZSTs here since they will automatically
         // be handled properly: the pointer will be bumped by zero bytes,
@@ -2054,7 +2055,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // If `ptr` is the last allocation, i.e., the bump finger of `footer` (the
     // current chunk), returns that finger.
     #[inline]
-    #[flux_rs::trusted(reason = "caller contract: `ptr` is a live allocation of `size` bytes from this Bump, so if it is the current chunk's bump finger, those bytes lie between the finger and the footer")]
+    #[flux_rs::trusted(reason = "ABORT: caller contract: `ptr` is a live allocation of `size` bytes from this Bump, so if it is the current chunk's bump finger, those bytes lie between the finger and the footer")]
     #[flux_rs::spec(fn(&ChunkFooter[@fb, @fa, @fs, @_al, @_m, @ffa], NonNull<u8>[@b, @a, @_s, @_pm], size: usize)
         -> Option<NonNull<u8>{f: bump_finger(fb, fa, fs, f.base, f.addr, f.size) && ffa(f.addr)
             && f.base == b && f.addr == a && f.size >= size + <ChunkFooter as Sized>::size_of()}>)]
@@ -2071,7 +2072,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // is the last `FOOTER_SIZE` bytes of its chunk, whose data starts at the
     // allocation's base.
     #[inline]
-    #[flux_rs::trusted(reason = "every footer sits at the end of its own chunk: `new_chunk` places it at `data + size - FOOTER_SIZE`, and `EMPTY_CHUNK`'s data is the footer itself; and every chunk reachable from a `Bump<MIN_ALIGN>` belongs to it, so its finger is `MIN_ALIGN`-aligned")]
+    #[flux_rs::trusted(reason = "ABORT: every footer sits at the end of its own chunk: `new_chunk` places it at `data + size - FOOTER_SIZE`, and `EMPTY_CHUNK`'s data is the footer itself; and every chunk reachable from a `Bump<MIN_ALIGN>` belongs to it, so its finger is `MIN_ALIGN`-aligned")]
     #[flux_rs::spec(fn(NonNull<ChunkFooter>[@pb, @pa, @ps, @_pm]) -> {s: int, al: int, m: int.
             &ChunkFooter[pb, pb, s, al, m, |x| x % MIN_ALIGN == 0]
             | pa + <ChunkFooter as Sized>::size_of() == pb + s}
@@ -2083,7 +2084,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // Compares pointers to two of this `Bump`'s chunk footers, like `==`. Equal
     // footers also belong to the same allocation, i.e. have the same `base`.
     #[inline]
-    #[flux_rs::trusted(reason = "live chunks never share a footer address, so equal footer pointers belong to the same chunk allocation; that both chunks are live is the caller contract of `reset_to_raw_checkpoint`")]
+    #[flux_rs::trusted(reason = "ABORT: live chunks never share a footer address, so equal footer pointers belong to the same chunk allocation; that both chunks are live is the caller contract of `reset_to_raw_checkpoint`")]
     #[flux_rs::spec(fn(NonNull<ChunkFooter>[@ab, @aa, @_as, @_am], NonNull<ChunkFooter>[@bb, @ba, @_bs, @_bm])
         -> bool{r: (r => aa == ba && ab == bb) && (aa == ba => r)})]
     fn same_chunk(a: NonNull<ChunkFooter>, b: NonNull<ChunkFooter>) -> bool {
@@ -2093,7 +2094,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // Like `try_alloc_layout`, but also returns that the fresh allocation
     // doesn't overlap the live allocation of `live_size` bytes at `live`.
     #[inline]
-    #[flux_rs::trusted(reason = "caller contract: `live` is a live allocation of `live_size` bytes from this Bump, and a fresh allocation never overlaps a live one")]
+    #[flux_rs::trusted(reason = "ABORT: caller contract: `live` is a live allocation of `live_size` bytes from this Bump, and a fresh allocation never overlaps a live one")]
     #[flux_rs::spec(fn(&Self, Layout[@size, @align], NonNull<u8>[@_lb, @la, @_ls, @_lm], live_size: usize)
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, size, align)
             && (v.addr + size <= la || la + live_size <= v.addr)}, AllocErr>)]
@@ -2110,7 +2111,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     // allocating `delta_layout` right below it. The result starts the grown
     // allocation of `old_size + delta_layout.size()` bytes.
     #[inline]
-    #[flux_rs::trusted(reason = "caller contract: `ptr` is a live allocation of `old_size` bytes from this Bump; if it is the last allocation, the fast path allocates directly below it in the same chunk, so the result covers the old allocation too")]
+    #[flux_rs::trusted(reason = "ABORT: caller contract: `ptr` is a live allocation of `old_size` bytes from this Bump; if it is the last allocation, the fast path allocates directly below it in the same chunk, so the result covers the old allocation too")]
     #[flux_rs::spec(fn(&Self, NonNull<u8>, old_size: usize, Layout[@ds, @da])
         -> Option<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ds + old_size, da)}>)]
     fn grow_last_allocation(
@@ -2311,6 +2312,8 @@ impl<'a, const MIN_ALIGN: usize> Iterator for ChunkIter<'a, MIN_ALIGN> {
     type Item = &'a [mem::MaybeUninit<u8>];
 
     #[flux_rs::spec(fn(self: &strg Self) -> Option<Self::Item> ensures self: Self)]
+    #[flux_rs::trusted_impl(reason = "ABORT: missing Iterator specs; impl spec does not establish flux-core's `done`/`size` postconditions")]
+    #[flux_rs::trusted(reason = "ABORT: missing Iterator specs; flux cannot prove `from_raw_parts`'s non-null and validity preconditions for the pointer from `ChunkRawIter::next`")]
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             let (ptr, len) = self.raw.next()?;
@@ -2345,6 +2348,7 @@ impl<const MIN_ALIGN: usize> Iterator for ChunkRawIter<'_, MIN_ALIGN> {
 
     #[inline]
     #[flux_rs::spec(fn(self: &strg Self) -> Option<(*mut u8, usize)> ensures self: Self)]
+    #[flux_rs::trusted_impl(reason = "ABORT: missing Iterator specs; impl spec does not establish flux-core's `done`/`size` postconditions")]
     fn next(&mut self) -> Option<(*mut u8, usize)> {
         unsafe {
             let foot = self.footer.as_ref();

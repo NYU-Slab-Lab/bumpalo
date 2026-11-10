@@ -16,7 +16,7 @@ use core::str;
 /// comes from a live `&[T]` and `dst` points into memory owned through `&mut self`: Rust's
 /// aliasing rules make those disjoint, but flux can't check it.
 #[cfg(flux)]
-#[flux_rs::trusted(reason = "assumption: callers pass a pointer from a live `&[T]` and one into memory owned through `&mut self`, which Rust's aliasing rules keep disjoint")]
+#[flux_rs::trusted(reason = "ABORT: assumption: callers pass a pointer from a live `&[T]` and one into memory owned through `&mut self`, which Rust's aliasing rules keep disjoint")]
 #[flux_rs::spec(fn(src: *const[@s] T, n: usize, dst: *mut[@d] T) -> {() | nonoverlapping(s, d, n * T::size_of())})]
 fn assume_disjoint<T>(_src: *const T, _n: usize, _dst: *mut T) {}
 
@@ -562,6 +562,7 @@ where
 
     #[flux_rs::spec(fn(self: &strg Self[@b, @a, @s, @l, @c, @_m], n: usize) -> Result<(), AllocErr>[#ok]
         ensures self: Self{v: v.len == l && (ok => v.cap >= n)})]
+    #[flux_rs::trusted(reason = "BUG: `ptr` is not guaranteed to be the last allocation when `grow_internal` is called")]
     fn try_grow(&mut self, new_capacity: usize) -> Result<(), AllocErr> {
         if new_capacity <= self.capacity {
             return Ok(());
