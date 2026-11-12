@@ -18,6 +18,7 @@ all-features = true
 
 [package.metadata.flux]
 enabled = true
+lean = "check"
 
 [lib]
 path = "src/lib.rs"

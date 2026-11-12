@@ -1,0 +1,5 @@
+import LeanProofs.Flux.VC.EmplaceEmplaceSliceATMINALIGNTryExtendFromSliceClone
+import LeanProofs.User.Proof.EmplaceEmplaceSliceATMINALIGNTryExtendFromSliceCloneProof
+
+#check (F.EmplaceEmplaceSliceATMINALIGNTryExtendFromSliceClone_proof : F.EmplaceEmplaceSliceATMINALIGNTryExtendFromSliceClone)
+#print axioms F.EmplaceEmplaceSliceATMINALIGNTryExtendFromSliceClone_proof

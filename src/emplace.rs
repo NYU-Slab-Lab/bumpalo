@@ -892,6 +892,7 @@ where
     /// # foo().unwrap();
     /// ```
     #[inline]
+    #[flux_rs::proven_externally]
     pub fn try_extend_from_slice_clone(&mut self, src: &[T]) -> Result<(), AllocErr>
     where
         T: Clone,

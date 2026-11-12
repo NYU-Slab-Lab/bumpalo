@@ -63,6 +63,21 @@ flux_rs::defs! {
     qualifier FooterSize(size: int) { size >= <ChunkFooter as Sized>::size_of() }
     qualifier FooterAlign(addr: int) { addr % <ChunkFooter as Sized>::align_of() == 0 }
 
+    // Facts about `%` for `grow_internal` and `shrink`, which are checked with `uif_ops = "%"`
+    // (so `%` is uninterpreted there). Both hold for integer `%` under their guards.
+    // A multiple of a power of two is a multiple of any smaller power of two.
+    axiom ModWeaken(x: int, big: int, small: int) {
+        (pow2(big) && pow2(small) && small <= big && [%](x, big) == 0) => [%](x, small) == 0
+    }
+    // The sum of a multiple of `p` and a multiple of `q` is a multiple of any power of two `r`
+    // with `r <= p` and `r <= q`. Stated in one step so its pattern uses only terms that occur
+    // in the VCs (`x % p`, `y % q`, `z % r`), not the intermediate `x % r` and `y % r`.
+    axiom ModAddWeaken(x: int, y: int, z: int, p: int, q: int, r: int) {
+        (pow2(p) && pow2(q) && pow2(r) && r <= p && r <= q && z == x + y &&
+         [%](x, p) == 0 && [%](y, q) == 0) => [%](z, r) == 0
+    }
+
+
 }
 
 #[doc(hidden)]
@@ -2151,6 +2166,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@os, @oa], Layout[@ns, @na])
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
         requires allocated(b, a, s, os, oa) && ns <= os)]
+    #[flux_rs::opts(uif_ops = "%")]
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
@@ -2254,6 +2270,7 @@ impl<const MIN_ALIGN: usize> Bump<MIN_ALIGN> {
     #[flux_rs::spec(fn(&Self, NonNull<u8>[@b, @a, @s, @_m], Layout[@os, @oa], Layout[@ns, @na])
         -> Result<NonNull<u8>{v: allocated(v.base, v.addr, v.size, ns, na)}, AllocErr>
         requires allocated(b, a, s, os, oa) && os <= ns)]
+    #[flux_rs::opts(uif_ops = "%")]
     unsafe fn grow_internal(
         &self,
         ptr: NonNull<u8>,
